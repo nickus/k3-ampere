@@ -11,10 +11,10 @@ needs, what already falls back cleanly, and what a 3090 rig can and cannot do.
 |---|---|---|
 | KDA Triton kernels correct on sm_86 | ✅ verified on HW | `tests/models/kimi_k3/test_kda.py`: 33 passed / 6 skipped (skips = sm90+ FlashKDA paths) on 2×3090 |
 | MXFP4 MoE backend selectable on sm_86 (Marlin) | ✅ verified on HW | `test_mxfp4_kernel_selection.py`: 5 passed on 2×3090 |
-| vLLM boots K3 code path w/o kernel patches | ◑ static analysis (15-agent, adversarially verified); slice boot pending | every capability gate has an in-tree fallback: KDA→Triton, MoE→Marlin W4A16, MLA decode→TRITON_MLA, MLA prefill→FA2 |
+| vLLM boots K3 code path on sm_86 | ✅ verified on HW (PP=2) | Phase A bf16 + Phase B MXFP4-Marlin + CUDA graphs; needed exactly 3 python patches (`patches/`); see `results/2x3090_validation_2026-07-30.md` |
 | fp8 KV cache for K3 MLA on sm_86 | ❌ hard-blocked upstream | `TritonMLAImpl.__init__` raises below SM89; K3 fp8 path asserts require capability family 100. bf16 KV only: 1152 B/token/MLA-layer |
-| Full K3 fits 50×3090 | ❌ does not fit | weights ≈ 1601 GB (1446 mxfp4 experts + 155 bf16 rest) vs 1160 GB usable. Floor ≈ 70 cards weights-only, ~74 usable. See `docs/CAPACITY_50x3090.md` |
-| Spec decode under PP | MTP only, `VLLM_USE_V2_MODEL_RUNNER=1` | eagle3+PP and DSpark+PP raise in both runners; base checkpoint ships `num_nextn_predict_layers=0` (no MTP head!) |
+| Full K3 fits 50×3090 | ❌ does not fit (HW-validated) | 1 MoE layer = 15.72 GB packed: fits a 3090, **two OOM** → whole-layer PP = ~93 cards. Byte floor ~70-74 needs TP/EP. See `docs/CAPACITY_50x3090.md` |
+| Spec decode | MTP works at PP=1 (drafts counted); **MTP+PP=2 = known issue** (PP0 native crash, see results) | eagle3/DSpark+PP raise by design; base checkpoint ships no MTP head anyway |
 
 ## Layout
 
