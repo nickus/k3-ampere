@@ -16,13 +16,20 @@ workflow `w23-kernel-scoping`.
    open **PR #48918** (CT-WNA16 MoE via Humming) addresses. Adopting that is
    ~200–500 LOC of glue; a bespoke kernel is 1.5–3k LOC of CUDA duplicating a
    funded effort (and 3-bit breaks every power-of-2 packing assumption).
-2. **Quality, not kernels, is the binding constraint.** K3 is MXFP4-QAT
-   native — **Q4 IS its full precision**; 2.7 bpw is a true halving. The
-   llama.cpp K3 author warns Q2 "removes too much information"; the one
-   direct A/B on record has K3-Q2 losing to GLM-5.2 Q5; the closest measured
-   analog (DeepSeek V3.1) drops ~9.4 aider points at 2-bit. Expected:
-   K3@≤2.7bpw **at or below GLM-5.2 INT4**, which already serves on this
-   fleet with verified numbers.
+2. **Quality, not kernels, is the binding constraint — and it is UNMEASURED.**
+   Structural prior: K3's experts are MXFP4-QAT native (**Q4 IS its full
+   precision**), so 2.7 bpw halves from native precision with no headroom —
+   but the PR author explicitly labels this "pure hypothesizing".
+   The oft-cited "K3-Q2 lost to GLM-5.2 Q5" is, verified at source
+   (PR #26185 thread, user csabakecskemeti, 2026-07-28/29): **one tester,
+   one task** (zero-shot HTML Mario clone), a **homemade Q2_K** (NOT
+   unsloth's UD-Q2_K_XL), self-flagged "may be an unfair comparison or an
+   issue with my quant". The control is real — full-precision K3 GGUF
+   completed the same task "immaculate" — so his Q2 did lose a capability,
+   but this is an anecdote, not an A/B. (The "DeepSeek V3.1 −9.4 aider at
+   2-bit" datapoint from the research sweep is likewise not verified at
+   source by us.) Net: K3@≤2.7bpw quality is **unknown**; the anecdote +
+   prior lean negative, which is exactly why gate M0 exists.
 3. **Fleet correction:** 50×3090 + 6×4090 + 1×5090 ≈ **1376 GB** — unsloth
    UD-Q2_K_XL (861 GB) **fits today** via llama.cpp. The best-evidenced
    2-bit K3 quant is testable without any kernel work.
