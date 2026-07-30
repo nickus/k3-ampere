@@ -20,11 +20,21 @@ Target: unsloth UD-Q2_K_XL (861 GB) on the fleet. K3 support = llama.cpp
 Active bytes/token/layer at UD-Q2-ish ≈ 210 MB (16 routed experts ≈165 MB +
 shared + attn at higher bpw) → memory floor ~0.26 ms/layer at ~800 GB/s;
 plus MoE kernel-launch overhead (llama.cpp `mul_mat_id`) and 50+ PCIe hops
-(~14 KB each, latency-bound). Estimate: **~30–50 ms/token single-stream ≈
-20–33 tok/s**, consistent with the PR-thread datapoint (8×B200 layer-split =
-16.6 tok/s — overhead-bound, not BW-bound). Batched decode amortizes expert
-reads → aggregate maybe low hundreds tok/s; llama.cpp has no vLLM-class
-continuous batching, and >1 host requires the experimental RPC backend.
+(~14 KB each, latency-bound). **CORRECTED after source-verified deep-check (2026-07-30 late):** the
+"no vLLM-class continuous batching" sentence was WRONG — llama-server has
+iteration-level continuous batching on by default, ID-aware MMQ MoE
+batching on Ampere, GPipe-style prefill pipelining, and a modern cross-slot
+prompt cache. What limits aggregate is K3 itself: 896-expert top-16 routing
+saturates the expert-read union slowly (distinct experts ≈
+896·(1−(1−16/896)^B): 16@B1, 224@B16, 830@B128), and layer-split
+serializes the fleet to ONE card's bandwidth (pipelining is hard-disabled
+when any RPC device is present: `ggml-rpc.cpp:1874` async=false).
+Honest model: single-stream **10–20 tok/s** (downgraded from 20–33; the
+8×B200=16.6 datapoint is 25× off its BW floor — overhead-bound, and 50
+stages + RPC hops make that worse), aggregate ~45–70 tok/s at 16–32 slots
+≈ **2–5 tok/s per agent**. Plus a correctness landmine for our exact
+topology: Issue #20052 (dual 3090 no-P2P layer-split → incoherent output
+>2048 ctx, open) — see M0_RUNBOOK pre-flight.
 
 ## Verdict
 

@@ -54,9 +54,15 @@ hard-blocked on sm_86)
 ## Options, in order of realism
 
 1. **Grow to ~72–74 cards** — everything in this repo then applies as-is.
-2. **unsloth UD-Q2_K_XL GGUF (861 GB) via llama.cpp** — fits 50 cards, but:
-   no vLLM (KDA GGUF support in llama.cpp is immature), PP across 50 GPUs
-   with llama.cpp's scheduler, expect low throughput. Unvalidated.
+2. **unsloth UD-Q2_K_XL GGUF (861 GB) via llama.cpp** — fits 50 cards.
+   Validated mechanically (see results/); batching/caching are modern
+   (source-verified), BUT: any RPC device disables ALL cross-GPU
+   pipelining (ggml-rpc.cpp:1874), RPC is PoC-grade (CVE-2026-34159
+   CVSS 9.8 patched 2026-03; open 4-node RDMA deadlock #24813), TENSOR
+   split mode refuses kimi-linear, and Issue #20052 (no-P2P 3090
+   layer-split → incoherent output >2048 ctx) targets our exact
+   topology. Expect ~10-20 tok/s single-stream, 2-5 tok/s per agent at
+   16-32 slots. Quality-gate vehicle, not a serving platform.
 3. **Sub-3-bit expert kernel for vLLM (Marlin-style W2/W3)** — multi-kLOC
    CUDA project. Out of scope until 1–2 are exhausted.
 4. Serve **Kimi-Linear-48B** (same code path, fits trivially) for stack
