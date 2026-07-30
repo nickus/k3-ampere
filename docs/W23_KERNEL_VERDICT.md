@@ -28,8 +28,19 @@ workflow `w23-kernel-scoping`.
    completed the same task "immaculate" — so his Q2 did lose a capability,
    but this is an anecdote, not an A/B. (The "DeepSeek V3.1 −9.4 aider at
    2-bit" datapoint from the research sweep is likewise not verified at
-   source by us.) Net: K3@≤2.7bpw quality is **unknown**; the anecdote +
-   prior lean negative, which is exactly why gate M0 exists.
+   source by us.)
+   **Update (unsloth.ai/docs/models/kimi-k3):** unsloth publishes per-quant
+   metrics — UD-Q2_K_XL (861.3 GB): mean KLD 0.178, PPL 1.736 vs 1.458
+   lossless (+19%), top-1 90.4%. Meanwhile *community* quants at similar
+   sizes are catastrophic (IQ1_M PPL 54.6, IQ2_XXS PPL 96) — the PR-thread
+   tester's homemade Q2 almost certainly belongs to that class, so his
+   Mario-clone failure says nothing about UD-Q2_K_XL. Net: on-paper quality
+   of the dynamic Q2 is *respectable*; task-level quality still unmeasured →
+   gate M0, now with better priors. Their B200 numbers (~20 tok/s gen,
+   >120 tok/s throughput) match our 3090 extrapolation. Run with unsloth's
+   fork (`unslothai/llama.cpp` PR #48, branch kimi-k3-fullsize-vision),
+   temp 1.0 / top-p 0.95, RAM+VRAM ≥ 880 GB for Q2_K_XL (fleet: OK; even
+   UD-IQ1_S at 594 GB fits ~25 cards for a cheap first taste).
 3. **Fleet correction:** 50×3090 + 6×4090 + 1×5090 ≈ **1376 GB** — unsloth
    UD-Q2_K_XL (861 GB) **fits today** via llama.cpp. The best-evidenced
    2-bit K3 quant is testable without any kernel work.
