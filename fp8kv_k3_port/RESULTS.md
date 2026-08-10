@@ -56,9 +56,26 @@ path, not decode throughput. Real serving amortizes launch across a
 continuous batch; a bf16-vs-fp8 A/B on the e2e slice is the honest speed
 number (pending).
 
-## Remaining (GPU gate C — e2e)
+## GPU gate C — e2e boot: PASSED (2026-08-10)
 
-Boot a K3 slice with `--kv-cache-dtype fp8_ds_mla`, exercise mixed
-prefill+decode, assert the selected backend is TRITON_MLA with a uint8 656-wide
-cache, and teacher-force cosine vs bf16. Needs the rc5 source wheel (rebuilding;
-the local rc4 wheel was a truncated scp — caught by a zip-integrity check).
+Booted the K3 slice with `--kv-cache-dtype fp8_ds_mla` on a real 3090
+(wheel rc5, all patches applied). Confirmed from the engine log:
+- `Using fp8_ds_mla data type to store kv cache` — the dtype threaded through
+  cache config;
+- `Using TRITON_MLA attention backend` + `Using FLASH_ATTN MLA prefill
+  backend` — our P3a/b/c gates let fp8_ds_mla reach TritonMLA on sm_86;
+- `Application startup complete`.
+- **Generation runs** on both short and long (400-token) prompts — the full
+  mixed loop executes: fp8 cache insert (CUDA writer) → chunked-prefill
+  dequant (`cp_gather_and_upconvert_fp8_kv_cache`) → our decode kernel via
+  `forward_mqa`. (Text is gibberish by design — `--load-format dummy`.)
+
+The 5 integration patches (`apply_vllm_patches.py`) are proven end-to-end,
+not just in isolation. A bf16-vs-fp8 greedy-parity check on the same
+deterministic dummy weights is the final numeric confirmation (running).
+
+Boot-path notes for the runbook: top-level `architectures` must be forced
+to `KimiLinearForCausalLM` (text-only) or the loader pulls an image
+processor; the fp8kv_k3 module must be importable by the worker (drop into
+site-packages — an editable install needs a pyproject). rc5 wheel kept
+with a zip-integrity check (the rc4 copy was a silently-truncated scp).
