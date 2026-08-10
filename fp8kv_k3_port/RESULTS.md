@@ -71,8 +71,13 @@ Booted the K3 slice with `--kv-cache-dtype fp8_ds_mla` on a real 3090
   `forward_mqa`. (Text is gibberish by design — `--load-format dummy`.)
 
 The 5 integration patches (`apply_vllm_patches.py`) are proven end-to-end,
-not just in isolation. A bf16-vs-fp8 greedy-parity check on the same
-deterministic dummy weights is the final numeric confirmation (running).
+not just in isolation.
+
+**Final numeric confirmation: greedy parity EXACT.** Same deterministic
+slice served twice — `--kv-cache-dtype auto` (bf16) vs `fp8_ds_mla` — same
+greedy prompt, 32 tokens: **token-for-token identical output**, equal TPOT
+(8 ms at slice scale). The fp8 storage path introduces no decision-level
+divergence on this workload.
 
 Boot-path notes for the runbook: top-level `architectures` must be forced
 to `KimiLinearForCausalLM` (text-only) or the loader pulls an image
