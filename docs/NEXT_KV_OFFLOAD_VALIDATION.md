@@ -25,3 +25,12 @@ PP or K3's hybrid layers, the plan breaks — quietly.
 Same 2-card phase as the fp8-KV port PP=2 leg (task #26 tail) — do both together.
 First read the `offload-compat` research topic result (LMCache vs native, PP +
 custom-page-size support) before touching hardware.
+
+## STATUS 2026-08-10: VALIDATED — see results/kv_offload_validation_2026-08-10.md
+Verdict: KV offload NOT ready for K3-hybrid on either connector (native fails
+on hybrid block/hash divisibility; LMCacheV1 fails unifying KDA+MLA specs).
+The KDA-state resume risk is REAL — LMCache's own docs warn generation is
+"not bit-exact after restore" for hybrids. fp8-KV port PP=2 parity is EXACT
+and independent of offload. Do not depend on offload for the serving plan;
+track upstream RFC #33689. LMCacheMPConnector at PP=1 (single-node, non-bit-
+exact) is the only lead if RAM offload is ever wanted — untested.
