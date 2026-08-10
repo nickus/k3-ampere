@@ -27,16 +27,28 @@ def _golden():
     )
 
 
+def _assert_matches_golden(got, want):
+    """Bit-exact on the 254 finite fp8e4m3fn values; is-NaN on the two NaN
+    encodings (0x7F/0xFF). The exact NaN PAYLOAD is not contractual — torch's
+    own cast differs across devices (0x7F80 on CPU, 0x7FFF on CUDA) — and NaN
+    never appears in real KV data. Any NaN out is correct."""
+    finite = ~(torch.isnan(want))
+    g = got.view(torch.uint16).to(torch.int32)
+    w = want.view(torch.uint16).to(torch.int32)
+    assert torch.equal(g[finite], w[finite])
+    assert torch.isnan(got[~finite]).all()
+
+
 def test_torch_twin_bit_exact_all_256():
     got = dequant_bitmath_torch(torch.arange(256, dtype=torch.uint8, device=DEVICE))
-    assert torch.equal(got.view(torch.uint16), _golden().view(torch.uint16))
+    _assert_matches_golden(got, _golden())
 
 
 def test_triton_kernel_bit_exact_all_256():
     u8 = torch.arange(256, dtype=torch.uint8, device=DEVICE)
     out = torch.empty(256, dtype=torch.float16, device=DEVICE)
     _sweep_kernel[(1,)](u8, out, 256, BLOCK=256)
-    assert torch.equal(out.view(torch.uint16), _golden().view(torch.uint16))
+    _assert_matches_golden(out, _golden())
 
 
 @pytest.mark.parametrize("byte,mag", [(0x7F, 0x7F80), (0xFF, 0xFF80)])

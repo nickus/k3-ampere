@@ -19,7 +19,7 @@ import triton
 import triton.language as tl
 
 from .dequant import dequant_bitmath_triton
-from .layout import ROPE_U16_OFF, ROW_BYTES, SCALE_F32_OFF
+from .layout import ROPE_U16_OFF, ROW_BYTES, SCALE_F32_OFF  # noqa: F401 (launcher-side)
 
 ROW_F32 = ROW_BYTES // 4    # 164
 ROW_U16 = ROW_BYTES // 2    # 328
@@ -51,6 +51,11 @@ def _fwd_grouped_stage1_ds_mla(
     NUM_KV_SPLITS: tl.constexpr,
     PAGE_SIZE: tl.constexpr,
     Lv: tl.constexpr,             # 512
+    ROW_BYTES: tl.constexpr,      # 656
+    ROW_F32: tl.constexpr,        # 164
+    ROW_U16: tl.constexpr,        # 328
+    SCALE_F32_OFF: tl.constexpr,  # 128
+    ROPE_U16_OFF: tl.constexpr,   # 264
 ):
     cur_batch = tl.program_id(0)
     cur_head_id = tl.program_id(1)
@@ -201,6 +206,8 @@ def decode_attention_fwd_ds_mla(
         BLOCK_DMODEL=512, BLOCK_DPE=64, BLOCK_DV=512,
         BLOCK_N=BLOCK_N, BLOCK_H=BLOCK_H, NUM_KV_SPLITS=num_kv_splits,
         PAGE_SIZE=page_size, Lv=512,
+        ROW_BYTES=ROW_BYTES, ROW_F32=ROW_F32, ROW_U16=ROW_U16,
+        SCALE_F32_OFF=SCALE_F32_OFF, ROPE_U16_OFF=ROPE_U16_OFF,
         num_warps=num_warps, num_stages=num_stages,
     )
     grid2 = (batch, q_heads)
