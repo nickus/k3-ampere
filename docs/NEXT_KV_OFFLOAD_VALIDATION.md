@@ -1,10 +1,10 @@
 # NEXT (do not drop): KV-offload validation — task #27
 
 It is the load-bearing
-check before betting the 50-card serving plan on RAM+NVMe KV offload.
+check before betting a multi-GPU serving plan on RAM+NVMe KV offload.
 
 ## Why it matters
-The whole "10 agents × 1M on ~50 cards" plan assumes sleeping sessions' KV can
+A many-agents × 1M-context serving plan at this scale assumes sleeping sessions' KV can
 be evicted to NVMe and restored per-worker. If the connector doesn't play with
 PP or K3's hybrid layers, the plan breaks — quietly.
 

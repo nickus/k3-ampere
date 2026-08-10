@@ -1,4 +1,4 @@
-# POSTED 2026-08-10 as https://huggingface.co/vellum-ai/Kimi-K3-W3A16-g64/discussions/1 (account: bearmind)
+# POSTED 2026-08-10 as https://huggingface.co/vellum-ai/Kimi-K3-W3A16-g64/discussions/1
 # Draft: HF discussion for vellum-ai/Kimi-K3-W3A16-g64
 
 Post at: https://huggingface.co/vellum-ai/Kimi-K3-W3A16-g64/discussions/new

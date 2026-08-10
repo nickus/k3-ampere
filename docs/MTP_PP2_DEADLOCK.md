@@ -1,7 +1,7 @@
 # K3 MTP + PP=2: rank-asymmetric init deadlock (diagnosed 2026-07-30)
 
 Status: root-caused to phase & mechanism; exact frame needs SYS_PTRACE
-(vast container forbids py-spy/gdb). Upstream issue draft below — **not
+(the rented container forbids py-spy/gdb). Upstream issue draft below — **not
 filed yet**.
 
 ## Symptom
@@ -40,7 +40,7 @@ config: boots and drafts (23/23 drafts counted).
   ships no MTP head anyway, so nothing is lost **today**).
 - Raising dist timeouts converts crash→hang; do NOT use as a workaround.
 
-## Upstream issue draft (file after approval)
+## Upstream issue draft
 
 Title: `[Bug] Kimi-K3 MTP + PP>1 (V2 runner): rank-asymmetric collective in
 post-profiling init deadlocks; watchdog kills rank 0 after dist timeout`

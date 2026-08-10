@@ -1,6 +1,6 @@
 # M0 gate runbook — K3 UD-Q2_K_XL vs GLM-5.2 INT4 (draft)
 
-Goal: task-level A/B on OUR eval set. Speed is irrelevant; quality verdict is.
+Goal: task-level A/B on an internal eval set. Speed is irrelevant; quality verdict is.
 Node requirement: RAM+VRAM ≥ ~880 GB for UD-Q2_K_XL (mmap from NVMe works,
 slower). Cheap recon variant: UD-IQ1_S (594 GB) — weaker (KLD 0.56), use only
 to smoke the pipeline, not for the verdict.
@@ -15,7 +15,7 @@ cmake -B build -DBUILD_SHARED_LIBS=OFF -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES
 cmake --build build --config Release -j --target llama-cli llama-server llama-gguf-split
 ```
 
-sm_86 gotchas (from our 2×3090 bring-up, apply if the image is trimmed):
+sm_86 gotchas (from a 2×3090 bring-up, apply if the image is trimmed):
 pip `cmake>=3.26`; `ln -s libnvrtc.so.13 /usr/local/cuda/lib64/libnvrtc.so`;
 `CPATH=/usr/local/lib/python3.12/dist-packages/nvidia/cu13/include` if
 cusparse.h missing; transformers-new: `bytes_to_unicode` import fix in
@@ -31,7 +31,7 @@ hf download unsloth/Kimi-K3-GGUF --include "UD-Q2_K_XL/*" --local-dir /data/k3-g
 
 llama.cpp Issue #20052: dual RTX 3090 **without P2P** + layer-split →
 **incoherent output past ~2048 ctx** (open, unresolved; 3090 P2P is
-driver-blocked by default = exactly our topology). If this reproduces,
+driver-blocked by default = a common multi-3090 topology). If this reproduces,
 every M0 score is garbage. Test: same >4k-token prompt, greedy, on
 (a) 1 GPU, (b) 2 GPUs layer-split same host, (c) across an RPC boundary —
 diff outputs. Divergence in (b)/(c) = STOP, file/track upstream first.
@@ -64,7 +64,7 @@ multi-day run, not an afternoon.
 ## 4. A/B protocol
 
 - Same task set through both endpoints (OpenAI-compat both sides).
-- Tasks: our real coding-agent scenarios + a public anchor (e.g. a
+- Tasks: internal coding-agent scenarios + a public anchor (e.g. a
   polyglot/aider subset) for calibration.
 - Score: task success (did it work), not vibes; 2–3 attempts per task at
   the model's recommended sampling; record tok/s incidentally.

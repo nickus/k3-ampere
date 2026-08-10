@@ -41,7 +41,7 @@ workflow `w23-kernel-scoping`.
    fork (`unslothai/llama.cpp` PR #48, branch kimi-k3-fullsize-vision),
    temp 1.0 / top-p 0.95, RAM+VRAM ≥ 880 GB for Q2_K_XL (fleet: OK; even
    UD-IQ1_S at 594 GB fits ~25 cards for a cheap first taste).
-3. **Fleet correction:** 50×3090 + 6×4090 + 1×5090 ≈ **1376 GB** — unsloth
+3. **Fleet correction:** a mixed-generation fleet totaling ≈**1376 GB** VRAM — unsloth
    UD-Q2_K_XL (861 GB) **fits today** via llama.cpp. The best-evidenced
    2-bit K3 quant is testable without any kernel work.
 

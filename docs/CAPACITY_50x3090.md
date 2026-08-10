@@ -53,7 +53,7 @@ hard-blocked on sm_86)
 
 ## Options, in order of realism
 
-1. **Grow to ~72–74 cards** — everything in this repo then applies as-is.
+1. **A fleet of ~72–74 cards of this class** — everything in this repo then applies as-is.
 2. **unsloth UD-Q2_K_XL GGUF (861 GB) via llama.cpp** — fits 50 cards.
    Validated mechanically (see results/); batching/caching are modern
    (source-verified), BUT: any RPC device disables ALL cross-GPU

@@ -37,8 +37,7 @@ silently returning False for everything was the tell.
 ## Infra notes for the runbook
 
 - rented GPU instances can be evicted after prolonged idle time, and storage on a
-  stopped instance is not durable; artifacts pulled same-day now (rc4 wheel in
-  `/home/dev/wheels/`).
+  stopped instance is not durable; artifacts pulled same-day now (wheel cached locally).
 - vastai re-published the `vllm:v0.25.1-cuda-13.0` image tag with a
   different torch ABI build → rc2 wheel became unloadable (undefined
   symbol in FA2). Wheel rebuilt as rc4 on the new box (192 cores, ~25 min).
@@ -52,7 +51,7 @@ silently returning False for everything was the tell.
 - The **only known way to serve vellum's W3 artifact on any shipped GPU
   stack** now exists (patched vLLM + repack). Posted as follow-up in their
   discussion #1.
-- For OUR fleet the W3 capacity math is unchanged (1 layer/card → ~93
+- At this fleet scale the W3 capacity math is unchanged (1 layer/card → ~93
   cards); W2 remains the target. But the whole low-bit path (scheme gates,
   factories, kernel, converter) is now exercised at 2 AND 3 bits — Track B
   de-risked further.

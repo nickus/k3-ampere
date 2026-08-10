@@ -42,4 +42,4 @@ Mechanically **feasible** (arch verified on sm_86, conversion pipeline
 verified, layer-split works); strategically **weak**: expected ~20–30 tok/s
 single-stream and quality ≤ GLM-5.2 INT4 (see `W23_KERNEL_VERDICT.md`).
 Use it for exactly one thing: **gate M0** — download UD-Q2_K_XL onto the
-volume, spread across the fleet, A/B against GLM-5.2 INT4 on real evals.
+volume, spread across available hardware, A/B against a strong INT4 baseline on representative evals.
