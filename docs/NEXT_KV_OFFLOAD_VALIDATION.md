@@ -1,6 +1,6 @@
 # NEXT (do not drop): KV-offload validation — task #27
 
-Nick flagged this twice as "очень важно" / "не забудь". It is the load-bearing
+It is the load-bearing
 check before betting the 50-card serving plan on RAM+NVMe KV offload.
 
 ## Why it matters

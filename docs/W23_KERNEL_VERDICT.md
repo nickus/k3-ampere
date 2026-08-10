@@ -47,7 +47,7 @@ workflow `w23-kernel-scoping`.
 
 ## Decision gates (cheap, run before ANY integration work)
 
-- **M0 (2–3 days):** llama.cpp UD-Q2_K_XL A/B vs GLM-5.2 INT4 on Nick's own
+- **M0 (2–3 days):** llama.cpp UD-Q2_K_XL A/B vs GLM-5.2 INT4 on our own
   coding-agent evals. If K3-Q2 does not beat GLM-5.2 INT4 — the K3-on-50-cards
   effort ends here (serve GLM-5.2, revisit when a better low-bit K3 exists).
 - **M1 (1 day):** Humming W2A16 grouped-MoE microbench on one 3090 — is it
@@ -66,7 +66,7 @@ path is weeks-old.
 1. (f) keep serving GLM-5.2 INT4 — zero-cost incumbent, likely winner
 2. (e) llama.cpp UD-Q2 — as the M0 gate + fallback serving path
 3. (b) Humming+GSQ W2 in vLLM — only route to real vLLM K3 on ~50 cards
-4. (d) buy +43 cards → 93-card native MXFP4 — lossless but $30–45k + PP93 uncharted
+4. (d) 93-card native MXFP4 — lossless but capex-heavy and PP93 uncharted
 5. (a) custom W2/W3 CUDA — only as targeted Humming/sm86 tuning, never a fork
 6. (c) ktransformers/CPU-offload — no K3 support, fat-RAM capex, slowest
 

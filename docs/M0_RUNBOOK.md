@@ -64,7 +64,7 @@ multi-day run, not an afternoon.
 ## 4. A/B protocol
 
 - Same task set through both endpoints (OpenAI-compat both sides).
-- Tasks: Nick's real coding-agent scenarios + a public anchor (e.g. a
+- Tasks: our real coding-agent scenarios + a public anchor (e.g. a
   polyglot/aider subset) for calibration.
 - Score: task success (did it work), not vibes; 2–3 attempts per task at
   the model's recommended sampling; record tok/s incidentally.

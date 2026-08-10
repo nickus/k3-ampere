@@ -1,6 +1,6 @@
 # W3-g64 (vellum geometry) serves on sm_86 via Humming — VALIDATED (2026-08-10)
 
-Claim proven on 1×3090 (vast 47355020, wheel rc4): a compressed-tensors
+Claim proven on 1×3090 (wheel rc4): a compressed-tensors
 **int3 / group 64** K3-slice checkpoint — the exact geometry of
 `vellum-ai/Kimi-K3-W3A16-g64` — loads and generates in vLLM:
 `Using 'HUMMING' WNA16 MoE backend` → startup complete → generation.
@@ -36,8 +36,8 @@ silently returning False for everything was the tell.
 
 ## Infra notes for the runbook
 
-- vast box 46282900 + volume were EVICTED after 10 idle days — stopped
-  instances are not durable; artifacts pulled same-day now (rc4 wheel in
+- rented GPU instances can be evicted after prolonged idle time, and storage on a
+  stopped instance is not durable; artifacts pulled same-day now (rc4 wheel in
   `/home/dev/wheels/`).
 - vastai re-published the `vllm:v0.25.1-cuda-13.0` image tag with a
   different torch ABI build → rc2 wheel became unloadable (undefined

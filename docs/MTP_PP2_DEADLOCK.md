@@ -2,7 +2,7 @@
 
 Status: root-caused to phase & mechanism; exact frame needs SYS_PTRACE
 (vast container forbids py-spy/gdb). Upstream issue draft below — **not
-filed yet** (outbound requires approval).
+filed yet**.
 
 ## Symptom
 
