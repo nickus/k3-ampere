@@ -9,10 +9,9 @@ readable months later by someone with no memory of the sessions.
   no native fp8, no FlashAttention-3, no Hopper/Blackwell kernels.
 - **Pipeline parallelism only.** Tensor parallelism over PCIe was measured to be
   a trap during the GLM-5.2 campaign.
-- **The rig is not assembled.** 26 cards + 6×4090 + 1×5090 exist, on the floor.
-  50 is the target, reached by selling the 4090s/5090 and topping up ~€3k.
-  **Every measurement in this repo was taken on rented boxes**, mostly a 4-layer
-  synthetic slice on 2×3090. Nothing has ever run on the owner's own hardware.
+- **The target rig is not built yet.** **Every measurement in this repo was
+  taken on rented boxes**, mostly a 4-layer synthetic slice on 2×3090. Nothing
+  here has run at full scale.
 - Serving target is **Kimi-K3 only**. Workload is a swarm of ~100 coding agents.
 
 ---
@@ -163,10 +162,12 @@ Kimi-K2 + W4A16. Our workload is coding agents, which is exactly where these
 numbers hold.
 
 **Not established**: the REAP paper predates K3 and never tested it; every
-K3-REAP artifact is a third party applying the formula; `runrunway`'s artifact
-has no published evaluation; and **calibration language matters** — one vendor's
-Japanese-calibrated variant shares only ~473 of 640 experts with the
-English/code one, so Russian performance is an open question, not a detail.
+K3-REAP artifact is a third party applying the formula; and `runrunway`'s
+artifact has no published evaluation. **Calibration corpus is a selection
+criterion** — a Japanese-calibrated cut shares only ~473 of 640 experts with an
+English/code one — but since the workload is English + mainstream programming
+languages, picking an English/code-calibrated cut makes the published retention
+numbers directly applicable rather than something to hedge against.
 
 **Naming trap**: `REAP640`/`REAP576`/`REAP-320` = experts **kept**;
 `REAP50` = percent **pruned** (so REAP50 = 448 kept). Do not compare vendors by
@@ -337,11 +338,12 @@ by experiment; the divergence happens before the connector is consulted.
 
 1. **M0 — is K3 actually better for our work than GLM-5.2?** Nothing else
    matters if the answer is no. Contender is now **REAP-448 MXFP4**, not a
-   homemade 2-bit quant. Eval set = real hermes-agent scenarios. Must include
-   **Russian**, because REAP calibration is language-sensitive.
-   Cost researched: ~$28–90 for a CPU/GGUF proxy, **~$200 to test the real
-   artifact** on rented GPUs. Given it gates a ~€3k card purchase, test the real
-   one. (Task #30)
+   homemade 2-bit quant. Eval set = real agentic coding sessions, not synthetic
+   benchmarks. Scope is **English + mainstream programming languages only** —
+   which is exactly the domain REAP's published retention numbers cover, so pick
+   an English/code-calibrated cut and they apply directly. Cost researched:
+   ~$28–90 for a CPU/GGUF proxy, **~$200 to test the real artifact** on rented
+   GPUs. It gates a large hardware commitment, so test the real one. (Task #30)
 2. **DSpark under PP** — the only throughput lever K3 has. Fix is understood and
    cheap in VRAM; upstream wants it and is blocked on hardware. (Task #32)
 3. **Does REAP-448 boot and serve on our stack with real weights?** Structurally

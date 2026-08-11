@@ -107,9 +107,9 @@ the mistake made earlier the same day when only a single output file was saved.
 ## Cost / hygiene
 
 Two rented boxes were discarded before this one (first accepted no SSH key,
-second could not pull an image); both destroyed within minutes. Total spend for
-this revalidation was **$1.69** ($5.28 → $3.59). Box destroyed on completion;
-zero instances running.
+second could not pull an image); both destroyed within minutes. Total rental spend for
+this revalidation was under $2. Box destroyed on completion; zero instances
+running.
 
 Time was lost to two self-inflicted mistakes worth remembering: a
 `pkill -f "revalidate.sh"` / `pgrep -f "api_server"` whose pattern matched the

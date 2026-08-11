@@ -76,11 +76,14 @@ sessions. REAP-384 buys a further 105 GB of resident KV for 8% more pruning.
 1. **The REAP paper does not test K3.** It predates the model; every "REAP'd K3"
    on HF is a third party applying the published formula. `runrunway`'s specific
    artifact has no published evaluation.
-2. **Quality on Russian.** The retention numbers above are coding benchmarks.
-   REAP calibration is language-sensitive — one vendor publishes an explicitly
-   Japanese-calibrated variant whose kept-expert set overlaps the English/code
-   set by only ~473 of 640. If non-English matters, calibration language is a
-   real variable, not a detail.
+2. **Which calibration set the artifact was pruned with.** REAP decides *which*
+   experts to keep from a calibration corpus, and that choice is corpus-
+   sensitive: one vendor publishes a Japanese-calibrated variant whose kept-set
+   overlaps the English/code one by only ~473 of 640 experts. Our workload is
+   English + mainstream programming languages, so this is not a risk to manage —
+   it is a **selection criterion**: take an English/code-calibrated cut, and the
+   published retention numbers (which are themselves English coding benchmarks)
+   apply directly. Confirm `runrunway`'s calibration corpus before committing.
 3. **Boot on our stack, with real weights.** Unverified for this artifact. But
    note our own slice has always run with a *reduced* expert count (8 vs 896)
    through the stock `kimi_k3` code — so a smaller `num_experts` is structurally
@@ -111,12 +114,13 @@ The honest trade: **$28–90 tests a GGUF proxy** (e.g. `mmnga-o/Kimi-K3-REAP50-
 which is the same 448-expert cut but *further* squeezed to Q2 — two lossy steps
 stacked), while **≈$200 tests the artifact we would actually serve**
 (REAP-448 at MXFP4). Given that the entire point of M0 is deciding whether to
-spend ~€3k on more cards, testing the real artifact is the better $200.
+commit to a large hardware purchase, testing the real artifact is the better
+$200.
 
 ## Recommended next step
 
 Download-free check first: our existing slice machinery already exercises the
-reduced-expert path. The real gate is **M0 quality on hermes-agent scenarios**,
+reduced-expert path. The real gate is **M0 quality on real agentic coding sessions**,
 and the right contender to put in it is now **REAP-448 MXFP4**, not a homemade
 2-bit quant — it is bigger-bit, already exists, and has published evidence at
 this exact pruning ratio on coding workloads.

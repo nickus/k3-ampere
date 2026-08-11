@@ -1,75 +1,182 @@
-# k3-ampere — Kimi K3 on RTX 3090 (sm_86), pipeline-parallel only
+# k3-ampere
 
-Port/validation effort for serving [Kimi K3](https://arxiv.org/abs/2607.24653)
-(2.8T MoE, 69 KDA + 24 MLA layers, MXFP4 experts) with vLLM on Ampere consumer
-GPUs. Upstream targets Hopper/Blackwell; this repo tracks exactly what sm_86
-needs, what already falls back cleanly, and what a 3090 rig can and cannot do.
+**Running Kimi-K3 on RTX 3090s.** Kimi-K3 is a 2.8-trillion-parameter model.
+vLLM supports it on Hopper and Blackwell GPUs. This repo is about making it work
+on Ampere consumer cards (sm_86) instead — cheap, second-hand, and everywhere.
 
-## → Start with [`JOURNAL.md`](JOURNAL.md)
+Everything here was tested on real GPUs. When something was only read from
+source code and not executed, it says so.
 
-The consolidated record: everything proven, everything disproven (including two
-of our own retracted verdicts), every experiment's actual measurement, the
-operational lessons, and the ranked open questions. This README is the
-quickstart; the journal is the memory.
+---
 
-## Status (2026-08-11)
+## The short version
 
-| Claim | Status | Evidence |
+Three questions matter when you try this:
+
+1. **Does the model even run on these cards?** Yes. No new CUDA kernels needed —
+   vLLM falls back to Triton and Marlin paths that already work on Ampere. It
+   takes three small Python patches.
+2. **Does it fit?** Not the full model: it needs about 1601 GB and 50 cards give
+   you about 1160 GB. But a pruned version that fits **already exists**, in the
+   same format we already serve.
+3. **Can you keep 100 agents alive at once?** Yes — their KV caches can sleep on
+   NVMe and come back **bit-for-bit identical**. This was the main open risk and
+   it is now closed.
+
+The thing that is *not* solved: **speed**. K3 has no working speculative
+decoding on this setup. See below.
+
+---
+
+## What works today
+
+| | Status | Evidence |
 |---|---|---|
-| KDA Triton kernels correct on sm_86 | ✅ verified on HW | `tests/models/kimi_k3/test_kda.py`: 33 passed / 6 skipped (skips = sm90+ FlashKDA paths) on 2×3090 |
-| MXFP4 MoE backend selectable on sm_86 (Marlin) | ✅ verified on HW | `test_mxfp4_kernel_selection.py`: 5 passed on 2×3090 |
-| vLLM boots K3 code path on sm_86 | ✅ verified on HW (PP=2) | Phase A bf16 + Phase B MXFP4-Marlin + CUDA graphs; 3 python patches (`patches/`); `results/2x3090_validation_2026-07-30.md` |
-| Still works on current vLLM | ✅ verified on HW | **main = 0 patches, release 0.27.0 = 1 line**; `results/revalidation_vllm_0270_2026-08-11.md` |
-| fp8 KV cache for K3 MLA on sm_86 | ✅ **we wrote it** | 656 B/token/layer vs 1152 → 1.75× capacity. Kernel 12/12, cosine 0.9999967, greedy parity exact, exact under PP=2. `fp8kv_k3_port/RESULTS.md` |
-| KV offload to NVMe on hybrid + PP | ✅ verified on HW, **bit-exact** | max logprob delta 0.00000000 restoring from CPU and disk tiers, up to 28,417-token prompts. `results/kv_offload_PROVEN_2026-08-11.md` |
-| Full K3 (MXFP4, 896 experts) fits 50×3090 | ❌ does not fit | ≈1601 GB vs 1160 usable. 1 MoE layer = 15.72 GB packed: fits a 3090, **two OOM** → ~93 cards. `docs/CAPACITY_50x3090.md` |
-| **A K3 that does fit 50×3090** | ⚠️ exists, unvalidated | `runrunway/Kimi-K3-REAP-448experts` — **837 GB, same MXFP4 format we already serve**. Fits at 16.7 GB/card. Quality on K3 unproven. `docs/REAP_ROUTE.md` |
-| Spec decode | ❌ **none available under PP** | K3 ships no MTP head (`num_nextn_predict_layers=0`); DSpark is the only option and hard-raises under PP. Root-caused + fix sketched: `docs/DSPARK_PP_BLOCKER.md` |
-| Quality vs GLM-5.2 | ❓ **never measured** | The gate that decides everything. `docs/M0_RUNBOOK.md` |
+| Kimi-K3 runs on sm_86 (RTX 3090) | ✅ tested on GPUs | Bf16 and MXFP4 both serve at PP=2, CUDA graphs 51/51, 3 Python patches → [`results/2x3090_validation_2026-07-30.md`](results/2x3090_validation_2026-07-30.md) |
+| Still works on today's vLLM | ✅ tested on GPUs | **0 patches on `main`, 1 line on release 0.27.0** → [`results/revalidation_vllm_0270_2026-08-11.md`](results/revalidation_vllm_0270_2026-08-11.md) |
+| fp8 KV cache for K3 on Ampere | ✅ we wrote it | 656 bytes/token/layer instead of 1152 → **1.75× more context per card**. Cosine 0.9999967, outputs identical to bf16 → [`fp8kv_k3_port/RESULTS.md`](fp8kv_k3_port/RESULTS.md) |
+| KV cache offload to RAM and NVMe | ✅ tested on GPUs | Hybrid model + pipeline parallel + disk tier, **restored bit-for-bit** (logprob difference 0.00000000) → [`results/kv_offload_PROVEN_2026-08-11.md`](results/kv_offload_PROVEN_2026-08-11.md) |
+| 2-bit and 3-bit weights on a 3090 | ✅ tested on GPUs | 2-bit costs no extra time vs 4-bit; a real 3-bit checkpoint serves after repacking, cosine 1.000000 → [`results/w3_validation_2026-08-10.md`](results/w3_validation_2026-08-10.md) |
 
-## Layout
+## What does not work yet
 
-- `tools/make_slice_config.py` — builds tiny text-only slice configs
-  (`KimiLinearForCausalLM`, 3 KDA + 1 MLA layer) that keep every
-  layout-critical dimension at production value. Phases: **a** bf16 mechanics,
-  **b** + `mxfp4-pack-quantized` (Marlin), **c** + 1 MTP layer.
-  Weights via `--load-format dummy` — no checkpoint needed.
-- `tools/k3_real_config.json` — reference copy of the real HF config.
-- `configs/` — generated slice configs.
-- `docs/` — gap analysis, capacity math, runbook.
-- `tests/` — config-generator invariants (`pytest -q`).
+| | Problem |
+|---|---|
+| Full Kimi-K3 on 50 cards | Does not fit. ~1601 GB against ~1160 GB usable. One MoE layer is 15.72 GB, so one layer per card → you would need ~93 cards. |
+| Speculative decoding | K3 ships **no MTP head**. The only alternative, DSpark, **refuses to run with pipeline parallelism**. We found the reason and a fix — see [`docs/DSPARK_PP_BLOCKER.md`](docs/DSPARK_PP_BLOCKER.md). |
+| Quality after shrinking the model | **Never measured.** This is the question that decides whether any of this is worth doing. |
 
-## Quickstart (2×3090, PP=2)
+---
+
+## The checkpoint that changes things
+
+You do not have to squeeze K3 down to 2 bits to fit it. Someone already pruned
+half the experts and kept 4-bit weights:
+
+| Checkpoint | Size | Fits 50×3090? |
+|---|---|---|
+| `moonshotai/Kimi-K3` (original, MXFP4) | ~1601 GB | ❌ |
+| **`runrunway/Kimi-K3-REAP-448experts`** | **837 GB** | ✅ 16.7 GB per card, ~320 GB left for KV cache |
+| `runrunway/Kimi-K3-REAP-384experts` | 734 GB | ✅ with more room to spare |
+
+These use the **exact same format** we already serve (`compressed-tensors`,
+`mxfp4-pack-quantized`) — same architecture, same 93 layers, only fewer experts.
+Nothing new to port.
+
+Pruning experts (REAP, [arXiv:2510.13999](https://arxiv.org/abs/2510.13999))
+keeps coding quality much better than crushing precision: published numbers at
+50% pruning are 95.9% retention on coding for Qwen3-30B and 96.7% on SWE-bench
+for Qwen3-Coder-480B.
+
+**Two things to check before you trust it.** That paper never tested K3, and
+this specific checkpoint has no published evaluation. Also check what corpus it
+was pruned with — REAP picks which experts to keep from a calibration set, and
+an English/code cut and a Japanese cut can differ by hundreds of experts. Treat
+it as promising, not proven. Details:
+[`docs/REAP_ROUTE.md`](docs/REAP_ROUTE.md).
+
+---
+
+## Numbers worth knowing
+
+Taken from the live model config, not estimated.
+
+- **93 layers**: 69 use linear attention (KDA), 24 use MLA (every 4th layer).
+- **896 experts**, 16 active per token.
+- **Linear-attention state: 434 MB per session — and it never grows**, no matter
+  how long the conversation gets. That is why long-context offload is cheap.
+- **MLA KV cache at 1 million tokens: 15.74 GB** with our fp8 format
+  (27.65 GB without it).
+- So one sleeping 1M-token session costs about **16.2 GB**. A hundred of them
+  fit in **1.6 TB** of NVMe.
+- Waking a 1M-token session means reading 15.7 GB back. On a proper Gen4 NVMe
+  drive that is a couple of seconds; recomputing it would take 15+ minutes.
+
+---
+
+## Quick start (2 × RTX 3090)
 
 ```bash
-mkdir k3-slice && cp configs/slice_a.json k3-slice/config.json
-# tokenizer: reuse the real one (tokenizer.json etc. from the HF repo)
-VLLM_USE_V2_MODEL_RUNNER=1 vllm serve ./k3-slice \
+# build a tiny synthetic slice of K3 — no checkpoint download needed
+python tools/gen_slice_hf.py
+
+VLLM_USE_V2_MODEL_RUNNER=1 vllm serve /workspace/k3/k3-slice-hf \
   --trust-remote-code --load-format dummy \
   --pipeline-parallel-size 2 --tensor-parallel-size 1 \
-  --kv-cache-dtype auto --max-model-len 4096 \
-  --gpu-memory-utilization 0.9 --enforce-eager
+  --enable-prefix-caching --block-size 512 \
+  --max-model-len 32768 --enforce-eager
 ```
 
-Expected backend log lines on sm_86: `Using TRITON_MLA`,
-`Using FLASH_ATTN MLA prefill backend`, no FlashKDA line.
+On sm_86 you should see `Using TRITON_MLA` and
+`Using FLASH_ATTN MLA prefill backend`, and no FlashKDA line. That is correct —
+those are the Ampere fallbacks.
 
-## Known traps (do not)
+To add KV offload to disk:
 
-- `--kv-cache-dtype fp8` → ValueError at init (SM89+ required). Our
-  `fp8_ds_mla` is a *different* dtype and is carved out of that gate by `P3c`.
-- `additional_config.kda_prefill_backend=flashkda` → RuntimeError (sm90+).
-- DSpark spec decode + PP → `NotImplementedError` by design; see
-  `docs/DSPARK_PP_BLOCKER.md` for the root cause and the fix sketch.
-- MTP + PP without `VLLM_USE_V2_MODEL_RUNNER=1` → rank-0 `AttributeError: drafter`.
-- **Hybrid + offload without an explicit `--block-size`** → misleading
-  "need --enable-prefix-caching" assert even when it *is* enabled. At PP=50 this
-  hits 26 of 50 ranks; always pass `--block-size`. Upstream
-  [#51752](https://github.com/vllm-project/vllm/issues/51752).
-- **vLLM 0.27.0 + hybrid + prefix caching** → engine dies on the first request
-  (`index_fill_(): Expected dtype int64`). Fixed on main only; patch
-  `idx_mapping.long()` if you pin the release. Upstream
-  [#50947](https://github.com/vllm-project/vllm/issues/50947).
-- Generating a slice from the upstream K3 config verbatim → vLLM ≥0.27.0 takes
-  the multimodal path and the process is OOM-killed on a dummy vision tower.
-  `tools/gen_slice_hf.py` now emits a flat, text-only config.
+```bash
+  --kv-transfer-config '{"kv_connector":"OffloadingConnector","kv_role":"kv_both",
+    "kv_connector_extra_config":{"spec_name":"TieringOffloadingSpec",
+      "cpu_bytes_to_use":2147483648,
+      "secondary_tiers":[{"type":"fs","root_dir":"/nvme/kv"}]}}'
+```
+
+---
+
+## Traps we hit, so you do not have to
+
+- **Always pass `--block-size`** with a hybrid model plus offload. Without it you
+  get an error telling you to enable prefix caching — even when prefix caching
+  *is* enabled. The real cause is that pipeline stages disagree about block size.
+  At 50 stages this affects **26 of them**. Reported as
+  [vllm#51752](https://github.com/vllm-project/vllm/issues/51752).
+- **vLLM 0.27.0 crashes** on the first request with a hybrid model plus prefix
+  caching (`index_fill_(): Expected dtype int64`). Fixed on `main`, not in the
+  release. Patch is one word: `idx_mapping.long()`.
+  ([vllm#50947](https://github.com/vllm-project/vllm/issues/50947))
+- **`pip install vllm --pre` gives you the release, not `main`.** Install from
+  `https://wheels.vllm.ai/nightly/cu130` and then actually check
+  `vllm.__version__` — a wrong wheel URL fails silently.
+- **`--kv-cache-dtype fp8` is rejected below SM89.** Our `fp8_ds_mla` is a
+  different dtype and is carved out of that check by patch `P3c`.
+- **Do not build a slice from the upstream K3 config as-is.** It is multimodal
+  now, so vLLM ≥0.27.0 tries to load a vision tower and gets OOM-killed.
+  `tools/gen_slice_hf.py` writes a flat, text-only config instead.
+- **DSpark + pipeline parallelism raises `NotImplementedError`** by design.
+
+---
+
+## How to read this repo
+
+**Start with [`JOURNAL.md`](JOURNAL.md).** It is the full record: what was
+proven, what was disproven (including verdicts we published and later had to
+take back), what every experiment actually measured, and what is still unknown.
+
+| Path | What is in it |
+|---|---|
+| [`JOURNAL.md`](JOURNAL.md) | The complete story. Read this first. |
+| `docs/` | Deep dives: the REAP route, the DSpark blocker, capacity math, the Ampere gap analysis |
+| `results/` | One file per experiment, with the raw numbers |
+| `fp8kv_k3_port/` | Our fp8 KV cache implementation, with tests |
+| `tools/` | Slice generator, patch scripts, checkpoint converter |
+
+---
+
+## Honest limitations
+
+- Almost everything was measured on a **4-layer synthetic slice on 2 GPUs**, not
+  on the full 93-layer model. It proves the code paths work; it does not measure
+  real-world speed.
+- **No full-scale run has ever happened.** Multi-node behaviour, throughput with
+  100 concurrent agents, and quality after pruning are all unknown.
+- The speedup numbers in the offload results (1.2–1.9×) are an artifact of the
+  tiny test model, which is very cheap to prefill. Do not quote them as the real
+  benefit.
+
+## Upstream
+
+Bugs found here and reported to vLLM:
+[#51752](https://github.com/vllm-project/vllm/issues/51752) (ours),
+[#50947](https://github.com/vllm-project/vllm/issues/50947),
+[#50098](https://github.com/vllm-project/vllm/issues/50098).
+Details and current status in
+[`docs/UPSTREAM_FILING_RECORD.md`](docs/UPSTREAM_FILING_RECORD.md).
