@@ -1,3 +1,9 @@
+> **SUPERSEDED 2026-08-11** — the verdict below ("offload NOT ready for
+> K3-hybrid") was WRONG. Those runs failed on three config requirements
+> plus one upstream bug, not an architectural gap. See
+> `kv_offload_PROVEN_2026-08-11.md`: hybrid + PP + NVMe + fp8 all work,
+> with bit-exact restore.
+
 # KV-offload + PP=2 + K3-hybrid validation — 2026-08-10 (2×3090)
 
 Question (the load-bearing check before betting the RAM+NVMe KV-offload

@@ -34,3 +34,10 @@ The KDA-state resume risk is REAL — LMCache's own docs warn generation is
 and independent of offload. Do not depend on offload for the serving plan;
 track upstream RFC #33689. LMCacheMPConnector at PP=1 (single-node, non-bit-
 exact) is the only lead if RAM offload is ever wanted — untested.
+
+## RESOLVED 2026-08-11 — offload WORKS. See results/kv_offload_PROVEN_2026-08-11.md
+Hybrid K3 + PP=2 + CPU tier + NVMe(fs) tier + fp8_ds_mla: all boot, all restore
+BIT-EXACT (logprob delta 0.0). The KDA-state-loss fear is refuted for this path.
+Needed: --enable-prefix-caching, explicit --block-size (works around a real PP
+bug in _find_non_ssm_backend), cpu_bytes_to_use key, and a 1-line upstream fix
+(mamba_hybrid.py index_fill_ int64).
