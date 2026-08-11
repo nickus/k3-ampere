@@ -54,8 +54,10 @@ for i in $(seq 1 120); do
   fi
   SZ=$(stat -c %s "$LOG" 2>/dev/null || echo 0)
   if [ "$SZ" = "$PREV" ]; then STALL=$((STALL+1)); else STALL=0; PREV=$SZ; fi
-  # 90s of no new output, and warmup was reached => that is our hang
-  if [ "$STALL" -ge 9 ] && grep -q "ENTER warmup_kernels" "$LOG"; then STATE=hung; break; fi
+  # 90s of no new output and still not serving => hung. Deliberately NOT keyed on
+  # the probe's "ENTER warmup_kernels" marker: the point of this run is to work
+  # without instrumentation, and a stack tells us the phase anyway.
+  if [ "$STALL" -ge 9 ]; then STATE=hung; break; fi
 done
 echo "STATE=$STATE (after $((i*10))s)" | tee "$OUT/state.txt"
 

@@ -241,6 +241,30 @@ on Ampere there is no escape, because TRITON_MLA is the only MLA backend whose
 10, FlashAttn MLA wants 9, FlashMLA wants 9 or 10). Invisible on Hopper, which
 runs different kernels.
 
+**A fix was already open, and I had not found it.** [vllm#51065](https://github.com/vllm-project/vllm/pull/51065)
+("[ROCm][MLA] TritonMLA: support causal multi-token decode", opened 2026-08-04,
+a week before my report) makes exactly this change and derives the **identical**
+per-row formula — `seq_lens.repeat_interleave(query_len) - tail` where
+`tail = arange(query_len-1, -1, -1)`, i.e. our `seq_len - (query_len - 1 - j)`.
+It also moves `query_len_support` to `UNIFORM` next to
+`_cudagraph_support = UNIFORM_BATCH`, and its comment states the same coupling
+I traced independently: *"query_len_support gates supports_spec_decode, which is
+what raises reorder_batch_threshold"*. Two independent derivations agreeing is
+the strongest evidence either of us has.
+
+Why I missed it: the PR is tagged `[ROCm]`, so it does not surface from an
+NVIDIA-side search, even though the file it changes is shared. **Lesson: search
+open PRs by touched file, not only issues by symptom.**
+
+Consequence: no competing PR from us. The useful contribution is the one the PR
+explicitly asks for — it says it was tested only on gfx942 (MI325X) and that
+"NVIDIA hardware [has] not been exercised". Its diff applies cleanly to nightly
+`dev649`, so we run *their* patch on 4×RTX 3090 rather than our look-alike (A6
+is now skippable via `SKIP_A6=1` for exactly this). It is also worth telling
+them that on Ampere this is not the performance story they wrote up
+(13.01 → 62.00 tok/s on MI325) but a correctness one: no fallback backend
+exists, so an unflattened causal block is an out-of-bounds read.
+
 One thing the trace *strengthened*: the proposed fix divides
 `num_decode_tokens // num_decodes`, which assumes a uniform query length. That
 assumption is not mine — it is enforced upstream, because the split runs with

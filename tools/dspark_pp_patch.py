@@ -21,6 +21,7 @@ instead of reporting success. Usage:
 Design notes: docs/DSPARK_PP_DESIGN.md
 """
 
+import os
 import sys
 
 AUX_PREFIX = "aux_hidden_state_"
@@ -258,9 +259,18 @@ def main(sp: str) -> None:
     #
     # This is why speculative decoding cannot work on sm_86 at all today:
     # TRITON_MLA is the only MLA decode backend Ampere has.
+    #
+    # UPSTREAM: vllm#51065 (olka-amd, opened 2026-08-04) makes exactly this
+    # change, and arrives at the identical per-row formula independently. Set
+    # SKIP_A6=1 to leave the backend alone when that PR is applied instead, so
+    # we can test *their* patch rather than a look-alike.
     mla_backend = f"{sp}/vllm/v1/attention/backends/mla/triton_mla.py"
-    patch(
-        mla_backend,
+    _skip_a6 = os.environ.get("SKIP_A6") == "1"
+    if _skip_a6:
+        print("A6 skipped (SKIP_A6=1): expecting vllm#51065 to be applied instead")
+    if not _skip_a6:
+        patch(
+            mla_backend,
         """        block_table = attn_metadata.decode.block_table
         seq_lens = attn_metadata.decode.seq_lens
         if not attn_metadata.causal:""",
