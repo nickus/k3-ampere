@@ -45,9 +45,14 @@ def build(slice_cfg: dict, draft_layers: int = DRAFT_LAYERS) -> dict:
         "num_hidden_layers": draft_layers,
         "num_attention_heads": slice_cfg["num_attention_heads"],
         "num_key_value_heads": slice_cfg["num_attention_heads"],
-        # production MLA geometry — do not shrink
-        "q_lora_rank": 1536,
-        "kv_lora_rank": 512,
+        # MLA geometry. The per-head dims are layout-critical and stay at
+        # production values; the LoRA ranks are NOT — they must stay below the
+        # model width or the kernels get a shape combination that does not
+        # occur in any real checkpoint. Copying q_lora_rank=1536 verbatim onto
+        # a 1024-wide slice (the real draft is 1536 against 7168) produced
+        # `Triton Error [CUDA]: an illegal memory access was encountered`.
+        "q_lora_rank": max(256, min(1536, h // 2)),
+        "kv_lora_rank": max(128, min(512, h // 4)),
         "qk_nope_head_dim": 128,
         "qk_rope_head_dim": 64,
         "v_head_dim": 128,
