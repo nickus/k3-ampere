@@ -12,6 +12,9 @@ cd /workspace/k3
 PY=/venv/nm/bin/python
 export PYTHONPATH=/workspace/k3
 export VLLM_USE_V2_MODEL_RUNNER=1 VLLM_DSPARK_PROBE=1
+# vLLM's optional usage telemetry calls py-cpuinfo, which can raise
+# JSONDecodeError inside a forked worker and take the whole engine down.
+export VLLM_NO_USAGE_STATS=1 DO_NOT_TRACK=1
 
 cat > sitecustomize.py <<'EOF'
 try:
@@ -29,6 +32,7 @@ serve() {  # serve <tag> <pp>
     --model /workspace/k3/k3-slice-hf --served-model-name k3 --trust-remote-code \
     --load-format dummy --pipeline-parallel-size "$pp" --tensor-parallel-size 1 \
     --speculative-config "$SPEC" \
+    --enable-prefix-caching --block-size 512 \
     --max-model-len 4096 --gpu-memory-utilization 0.82 --enforce-eager \
     --port 18000 > "srv_$tag.log" 2>&1 &
   for i in $(seq 1 50); do

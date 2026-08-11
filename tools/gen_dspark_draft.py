@@ -30,7 +30,12 @@ def build(slice_cfg: dict, draft_layers: int = DRAFT_LAYERS) -> dict:
     # layers; with 4 layers the honest analogue is "all of them", which also
     # maximises the number of PP boundaries a tap has to survive — exactly what
     # the patch under test is for.
-    target_layer_ids = list(range(1, n_target + 1))
+    # vLLM adds 1 when converting these to aux-layer ids (DFlash semantics),
+    # so 0-based here lands on 1..n and stays inside the model. Using 1..n
+    # produced (2..n+1) and the out-of-range last id silently yielded one tap
+    # fewer than context_proj was sized for:
+    #   RuntimeError: mat1 and mat2 shapes cannot be multiplied (2048x3072 and 4096x1024)
+    target_layer_ids = list(range(0, n_target))
 
     return {
         "architectures": ["K3DSparkModel"],
@@ -59,6 +64,10 @@ def build(slice_cfg: dict, draft_layers: int = DRAFT_LAYERS) -> dict:
         "target_num_hidden_layers": n_target,
         "target_layer_ids": target_layer_ids,
         "fc_norm": True,
+        # Required: the speculator refuses to start without one of
+        # mask_token_id / dspark_noise_token_id / pard_token / ptd_token_id.
+        # The real draft uses 163837 against the same 163840-token vocabulary.
+        "mask_token_id": slice_cfg["vocab_size"] - 3,
         "markov_rank": 256,
         "markov_head_type": "vanilla",
         "enable_confidence_head": True,
