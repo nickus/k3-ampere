@@ -189,9 +189,31 @@ the number in the name.
 
 ---
 
-## 5. Throughput: K3 currently has no speculative-decoding lever
+## 5. Throughput: the speculative-decoding lever, and why it was closed
 
-This is the least comfortable finding in the repo.
+**Updated 2026-08-11 (evening): the lever is no longer closed on Ampere.** See
+`results/specdec_sm86_2026-08-11.md`. Speculative decoding now runs for K3 on a
+3090 — gate passed at PP=1, drafts generated. What follows explains why it was
+blocked, because the reason turned out to be deeper than pipeline parallelism.
+
+The decisive measurement: the failure reproduces **identically at PP=1 on a
+single GPU**. So it was never a PP problem. `TritonMLAImpl.forward_mqa` expands
+`block_table`/`seq_lens` for multi-token decode only on the *non-causal* path;
+on the causal path — ordinary speculative verification — the kernel reads past
+the end of `block_table`. Probe output at the fault site:
+`causal=True q=(768,8,576) bt=(256,8) ndecodes=256 ndtok=768`, i.e. 768 query
+rows against 256 table rows. TRITON_MLA is the only MLA decode backend Ampere
+has, so this closed speculative decoding for **every** sm_80/86/89 user of MLA
+models. Invisible on Hopper, which runs different kernels. Filed as
+[vllm#51848](https://github.com/vllm-project/vllm/issues/51848).
+
+Still open under PP: the engine completes a forward (the draft demonstrably
+receives all four taps, two of them computed on the other rank) and then hangs
+in warmup, where the ranks diverge — the sampler and drafter exist only on the
+last rank. Gate 2 (bit-identical taps) and any speedup number remain unproven;
+do not plan rig throughput on this lever yet.
+
+This was the least comfortable finding in the repo.
 
 MTP was *the* lever in the GLM-5.2 campaign (a full k=0..3 cost curve was
 measured). **It does not transfer**: K3 ships `num_nextn_predict_layers = 0` —
