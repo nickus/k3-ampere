@@ -228,7 +228,38 @@ commenter is blocked for lack of multi-GPU hardware, which we rent for cents.
 100-agent swarm that assumes speculation is unfounded. It does not affect
 correctness, and it does not affect the KV-offload result.
 
-→ `docs/DSPARK_PP_BLOCKER.md`, task #32
+### Status: patch written and statically verified, not yet run on GPUs
+
+Reading the code turned up a **second** defect that the guard hides, and it is
+the more dangerous one. K3's DSpark draft is not standalone — it consumes
+auxiliary hidden states tapped from five target layers. In
+`KimiK3Model.forward`, a non-last rank returns
+`IntermediateTensors({"hidden_states": …, "residual": …})` and **nothing else**,
+so every intermediate stage silently discards the taps it just computed. Fixing
+only the embedding/lm_head sharing would make DSpark initialise and generate
+while conditioning on one tap out of five — strictly worse than today's honest
+refusal.
+
+`tools/dspark_pp_patch.py` fixes both: it carries the taps in
+`IntermediateTensors` (receive → forward → reassemble, with receive buffers
+sized locally as `sum(1 for L in aux_hidden_state_layers if L < start_layer)`),
+and hosts the draft on the last rank with a one-time broadcast of rank 0's
+embedding. Verified without renting anything: all six anchors match real main
+(`a311916a2`), both patched files parse, a second run is a no-op, and the
+mechanism checks out — `IntermediateTensors.tensors` is a plain dict, the V2
+runner pre-allocates receive buffers through exactly the function being patched
+(`model_runner.py:417`), and the transport iterates the dict generically, so
+extra keys ride along and get sliced per token like the rest.
+
+`tools/dspark_pp_test.sh` runs three gates. Gate 2 — tap fingerprints identical
+at PP=1 and PP=2, using a position-weighted checksum so a *reordered* tap set is
+distinguishable from a correct one — is the only one that proves anything, since
+the defect is silent. `tools/dspark_pp_probe.py` instruments
+`combine_hidden_states`, the single funnel all taps pass through.
+`tools/gen_dspark_draft.py` builds a `K3DSparkModel` config scaled to the slice,
+because the published draft wants hidden 7168 and taps at layers 7–87.
+
+→ `docs/DSPARK_PP_BLOCKER.md`, `docs/DSPARK_PP_DESIGN.md`, task #32
 
 ---
 
