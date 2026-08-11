@@ -112,6 +112,34 @@ def warmup_kernels(""",
         "P5 mark prefill/decode boundary",
     )
 
+
+    # 3c. bracket the two calls that make up the prefill phase, so a hang lands
+    # on one of them. The second is the interesting one: sampled tokens have to
+    # come back from the last rank to the others, and the last rank is also the
+    # one that runs the drafter under speculation.
+    patch(
+        warmup,
+        """    model_runner.kv_connector.set_disabled(True)
+    worker_execute_model(prefill_output)""",
+        """    model_runner.kv_connector.set_disabled(True)
+    _wm_mark("prefill: BEFORE execute_model")
+    worker_execute_model(prefill_output)
+    _wm_mark("prefill: AFTER execute_model")""",
+        "P6 bracket prefill execute",
+    )
+    patch(
+        warmup,
+        """        worker_sample_tokens(grammar_output)
+
+        # Per-request state carried across the decode steps.""",
+        """        _wm_mark("prefill: BEFORE sample_tokens")
+        worker_sample_tokens(grammar_output)
+        _wm_mark("prefill: AFTER sample_tokens")
+
+        # Per-request state carried across the decode steps.""",
+        "P7 bracket prefill sampling",
+    )
+
     # 2. announce the pipeline payload on both sides
     src = open(pp_utils).read()
     if "[PP] send keys=" not in src:
