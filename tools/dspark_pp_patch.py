@@ -212,6 +212,51 @@ def main(sp: str) -> None:
         "A4 draft layer ids must offset by TOTAL target layers",
     )
 
+
+    # ---- A5: the embedding handoff, done where EVERY rank executes.
+    # `load_dspark_model` runs only on the last PP rank (init_speculator sits
+    # under `if self.is_last_pp_rank`), so no collective inside it can be
+    # symmetric — attempting one hangs the group. `load_model`, by contrast,
+    # runs on every rank, and the line below is reached before the draft is
+    # built. One broadcast, once, at load time.
+    patch(
+        runner,
+        """            if isinstance(self.speculator, DraftModelSpeculator):
+                self.speculator.load_model(self.model)""",
+        """            # Hand the target's embedding to the rank that will host the
+            # DSpark draft. Every rank reaches this point, so the collective is
+            # symmetric; the draft checkpoint deliberately omits embed_tokens.
+            if (
+                self.speculative_config is not None
+                and getattr(self.speculative_config, "method", None) == "dspark"
+                and get_pp_group().world_size > 1
+            ):
+                import torch as _t
+                import vllm.v1.worker.gpu.spec_decode.dspark.utils as _du
+
+                _lang = (
+                    self.model.get_language_model()
+                    if hasattr(self.model, "get_language_model")
+                    else self.model
+                )
+                _emb = getattr(getattr(_lang, "model", _lang), "embed_tokens", None)
+                _tc = self.vllm_config.model_config.hf_text_config
+                if _emb is not None and hasattr(_emb, "weight"):
+                    _buf = _emb.weight.data
+                else:
+                    _buf = _t.zeros(
+                        (_tc.vocab_size, _tc.hidden_size),
+                        dtype=self.vllm_config.model_config.dtype,
+                        device=self.device,
+                    )
+                get_pp_group().broadcast(_buf, src=0)
+                _du._PP_TARGET_EMBED_WEIGHT = _buf
+
+            if isinstance(self.speculator, DraftModelSpeculator):
+                self.speculator.load_model(self.model)""",
+        "A5 broadcast embedding where all ranks execute",
+    )
+
     # ---- A2: the embedding lives on rank 0; bring a copy to the draft's rank
     patch(
         utils,
@@ -239,9 +284,21 @@ def main(sp: str) -> None:
         _dev = next(draft_model.parameters()).device
         _dtype = vllm_config.model_config.dtype
 
-        _tied = getattr(_cfg, "tie_word_embeddings", False)
+        _shared = globals().get("_PP_TARGET_EMBED_WEIGHT")
+        if _shared is not None:
+            # Delivered by the model runner, where every rank was present.
+            target_embed = VocabParallelEmbedding(
+                _cfg.vocab_size, _cfg.hidden_size, params_dtype=_dtype
+            ).to(_dev)
+            target_embed.weight.data.copy_(_shared)
+            _log.info("DSpark/PP: embedding received from the model runner")
+            _tied = None
+        else:
+            _tied = getattr(_cfg, "tie_word_embeddings", False)
         _lm = get_target_lm_head(target_model, target_language_model)
-        if _tied and _lm is not None and hasattr(_lm, "weight"):
+        if _tied is None:
+            pass
+        elif _tied and _lm is not None and hasattr(_lm, "weight"):
             # Weights are tied, so lm_head IS the embedding matrix and it
             # already lives on this rank. Exact, no transfer needed.
             target_embed = VocabParallelEmbedding(
@@ -249,7 +306,7 @@ def main(sp: str) -> None:
             ).to(_dev)
             target_embed.weight.data.copy_(_lm.weight.data)
             _log.info("DSpark/PP: embedding taken from tied lm_head on this rank")
-        else:
+        elif True:
             # PLACEHOLDER. embed_tokens lives on rank 0 and there is no
             # symmetric point in this call path to move it. Enough to exercise
             # the tap plumbing; NOT production-correct — the real fix is to
