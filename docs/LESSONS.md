@@ -127,3 +127,25 @@ and hours in attention.
 slow, do the part that does not need it. The hour I spent waiting on background
 jobs produced nothing, and the same hour spent reading code found the defect
 that the whole patch turned out to be about.
+
+---
+
+## Addendum, same evening: two more that cost the rest of the day
+
+**21. Pick rented machines by bandwidth and uptime, not by price.**
+Fifteen boxes in one afternoon, three of them usable. The rent lost was under
+two dollars; the hours lost waiting for 20 GB images were the real cost. Also:
+offer IDs are ephemeral (they 404 within the hour) — only `machine_id` is
+stable, so record it for a host that worked.
+
+**22. "Retrying in N seconds" on every host is not bad luck, it is the registry.**
+Repeated layer-pull retries across unrelated hosts and datacentres means Docker
+Hub is rate-limiting, not that the machines are broken. Renting another box
+cannot fix it. Use an image the hosts already cache, or a registry that is not
+being throttled, and stop burning cycles on new rentals.
+
+**23. Plausibility does not shorten the path to a cause; measurement does.**
+Three well-argued hypotheses died in one session — speculation depth, EPLB, and
+decode-step asymmetry. Every one of them would have cost a run to "fix". Each
+probe, by contrast, answered in a single run: the MLA diagnosis, the proof that
+taps cross ranks, and the localisation of the hang to the prefill phase.
