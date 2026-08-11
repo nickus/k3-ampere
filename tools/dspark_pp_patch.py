@@ -121,6 +121,36 @@ def main(sp: str) -> None:
         "B4 allocate tap buffers",
     )
 
+    # ---- A0: the config layer rejects PP before the DSpark guard is ever
+    # reached. `create_draft_parallel_config` copies the target's
+    # pipeline_parallel_size into the draft's parallel config, so
+    # `verify_with_parallel_config` demands the draft implement SupportsPP —
+    # which it does not, and should not: the draft is NOT pipelined, it runs
+    # whole on one rank. Verify it as the single-stage model it is.
+    spec = f"{sp}/vllm/config/speculative.py"
+    patch(
+        spec,
+        """        if self.draft_model_config:
+            self.draft_model_config.verify_with_parallel_config(
+                self.draft_parallel_config
+            )""",
+        """        if self.draft_model_config:
+            _dpc = self.draft_parallel_config
+            _is_dspark = getattr(self, "method", None) == "dspark" or any(
+                "DSpark" in a for a in (self.draft_model_config.architectures or [])
+            )
+            if _is_dspark and _dpc.pipeline_parallel_size > 1:
+                _pp = _dpc.pipeline_parallel_size
+                object.__setattr__(_dpc, "pipeline_parallel_size", 1)
+                try:
+                    self.draft_model_config.verify_with_parallel_config(_dpc)
+                finally:
+                    object.__setattr__(_dpc, "pipeline_parallel_size", _pp)
+            else:
+                self.draft_model_config.verify_with_parallel_config(_dpc)""",
+        "A0 verify draft as single-stage",
+    )
+
     # ---- A: allow PP, and host the draft where lm_head already lives
     patch(
         utils,
