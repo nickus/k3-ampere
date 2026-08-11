@@ -117,3 +117,27 @@ Gates, in order:
 
 Gate 2 is the one that must not be skipped: Problem B fails *silently*, so a
 "it boots and generates" result proves nothing.
+
+## PP=2 is not sufficient to prove this patch
+
+A two-stage pipeline has no **middle** rank: rank 0 receives nothing (it is
+first) and rank 1 forwards nothing (it is last). The branch that actually
+carries state across the pipeline — *receive carried taps, append your own,
+forward the union* — is only exercised when a rank is neither first nor last,
+i.e. at **PP ≥ 3**.
+
+On the target rig that is the common case, not the corner: at PP=47, forty-five
+of forty-seven ranks are middle ranks. A patch validated only at PP=2 would be
+validated on the one topology where its main path never runs.
+
+Therefore the proof obligation is:
+
+| Topology | What it establishes |
+|---|---|
+| PP=2 | taps cross a boundary at all; ends of the pipeline behave |
+| **PP≥3** | **carried + own forwarding, ordering across multiple hops, buffer sizing on a rank with upstream taps** |
+
+`make_empty_intermediate_tensors` sizes receive buffers as
+`sum(1 for L in aux_hidden_state_layers if L < self.start_layer)` — at PP=2 that
+sum is 0 on rank 0 and the full set on rank 1, so the *arithmetic* is never
+tested against an intermediate value either.
