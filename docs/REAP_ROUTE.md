@@ -89,6 +89,40 @@ sessions. REAP-384 buys a further 105 GB of resident KV for 8% more pruning.
    through the stock `kimi_k3` code — so a smaller `num_experts` is structurally
    nothing new; vLLM reads it from config.
 
+## The published evidence stops at 50% pruning — this decides 448 vs 320
+
+Checked against both the paper (arXiv:2510.13999) and the Cerebras blog: **all
+published REAP numbers are at 25% and 50% compression. There is nothing above
+50%.** No cliff data, no graceful-degradation curve, nothing.
+
+That maps directly onto the two candidates:
+
+| Candidate | Experts kept | Pruned | Position vs published evidence |
+|---|---|---|---|
+| REAP-448 | 448 / 896 | **50%** | **exactly the validated operating point** (94–97% coding retention) |
+| REAP-320 | 320 / 896 | **64%** | **off the published curve entirely** — extrapolation |
+
+So the honest difference between them is not a percentage. It is that one sits
+where the method is measured and the other is past the last data point, on a
+compression axis where nobody has published whether degradation is smooth or a
+cliff.
+
+Two further confounds make a direct comparison impossible without running it:
+`runrunway`'s 448 and Blackfrost's 320 come from **different vendors with
+different calibration corpora**, and the 320 is additionally **abliterated**
+(refusal directions removed at the weight level — an unrelated modification the
+vendor calls "the contract") and **self-declared EXPERIMENTAL, with observed
+decode, coherence and under-load serving bugs**.
+
+Against that, 320 has one real argument in its favour: it was pruned against
+**measured coding routing load**, and its surviving expert tensors are bit-exact
+copies of the parent MXFP4 packs. Calibrating on the target domain is exactly
+what should buy back headroom at a higher ratio — but that is a hypothesis, not
+a measurement.
+
+**Consequence for M0**: this is not a documentation question, it is the
+experiment. Run both.
+
 ## Naming trap (bit us while reading these repos)
 
 `REAP640` / `REAP576` / `REAP-320` name the **kept** expert count.
