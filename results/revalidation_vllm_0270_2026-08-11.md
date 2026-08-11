@@ -17,7 +17,7 @@ with the workarounds the stack behaves as documented.
 | T2 | CPU tier, no explicit block size | **boot fails**: `tokens_per_block=16 not divisible by tokens_per_hash=512` |
 | T3 | CPU tier, `"blocks_per_chunk": 1` instead of block size | **boot fails**, identical assertion |
 | T4 | NVMe (`fs`) tier, explicit `--block-size 512` | boots; same first-request kill |
-| T5 | fp8_ds_mla + NVMe tier | our 4 fp8 patches **apply cleanly**, all anchors matched |
+| T5 | fp8_ds_mla + NVMe tier | our 4 fp8 patches **apply cleanly** on both 0.27.0 and main; on main it boots and restores **bit-exactly** (153 MB written to NVMe) |
 
 ## What each result means
 
@@ -48,6 +48,36 @@ zero edits. All four patches (`P3a` dtype list, `P3b` 656-byte cache shape,
 `P3c` SM89 gate carve-out, `P5` forward_mqa dispatch) matched their anchors —
 and those patches assert on drift, so this is a real check, not a silent no-op.
 
+## Then the same battery on patched 0.27.0, and on true main
+
+Two further passes on the same box. "True main" = nightly wheel
+`0.26.1rc1.dev610+ga311916a2` installed from
+`https://wheels.vllm.ai/nightly/cu130` (note: the wheel lives under
+`/<full-commit-sha>/`, and a hand-built URL with a literal `+` 404s — let pip
+resolve the index instead; my first attempt at this silently did nothing and
+reported the old version, which is why the check `vllm.__version__` after
+install matters).
+
+| Pass | T1 (CPU tier) | T2 (no block size) | T3 (blocks_per_chunk) | T4 (NVMe tier) |
+|---|---|---|---|---|
+| 0.27.0 unpatched | boots, request kills engine | fail | fail | boots, request kills engine |
+| 0.27.0 + `.long()` patch | **OK, Δlogprob 0.00000000** | fail | fail | **OK, Δlogprob 0.00000000** |
+| **true main, no patches** | **OK, Δlogprob 0.00000000** | fail | fail | **OK, Δlogprob 0.00000000**, 221 MB on disk |
+
+Prompt was 11,613 tokens in every probe. Restore vs cold prefill on main:
+0.075 s vs 0.127 s (CPU tier) and 0.080 s vs 0.129 s (NVMe tier) — again a
+~1.7× floor that reflects how cheap this 4-layer slice is to prefill, not the
+win on a real model.
+
+**Verified state of both bugs on main `a311916a2`:** `index_fill_` occurrences
+= 0 and `_fill_num_accepted_kernel` = 2 (crash fixed); the
+`if backend_cls is None: return` early return is still at
+`platforms/interface.py:624-626` (#51752 live).
+
+**Conclusion for task #29:** the offload stack needs **zero patches on main**
+and **one line on 0.27.0**. The only remaining blocker on both is #51752, and
+`--block-size N` clears it. Restore is bit-exact everywhere.
+
 ## Slice-config drift (cost us most of the time, worth recording)
 
 Upstream `moonshotai/Kimi-K3` config is now multimodal, and 0.27.0's registry
@@ -67,8 +97,24 @@ Fix: write the slice config as the flattened `text_config` with
 `architectures: ["KimiLinearForCausalLM"]`. `tools/gen_slice_hf.py` should be
 updated to emit that directly instead of the real repo's outer config.
 
+## Evidence
+
+`results/logs/revalidation_2026-08-11/evidence.tgz` — all 18 logs from the box
+(bootstrap, every test pass on all three trees, every server log) plus the final
+slice `config.json`. Pulled as a bundle *before* destroying the box, correcting
+the mistake made earlier the same day when only a single output file was saved.
+
 ## Cost / hygiene
 
 Two rented boxes were discarded before this one (first accepted no SSH key,
 second could not pull an image); both destroyed within minutes. Total spend for
-this session's revalidation is under $2 of the $5.28 balance.
+this revalidation was **$1.69** ($5.28 → $3.59). Box destroyed on completion;
+zero instances running.
+
+Time was lost to two self-inflicted mistakes worth remembering: a
+`pkill -f "revalidate.sh"` / `pgrep -f "api_server"` whose pattern matched the
+SSH command's own command line and killed the launcher before it started
+anything (fix: bracket the first character, or put the launch in a script file
+so the pattern never appears in the invoking command line), and starting a
+second test battery while the first was still running, so the two killed each
+other's servers.
