@@ -29,6 +29,17 @@ export VLLM_USE_FLASHINFER_SAMPLER=0
 unset SKIP_KERNEL_WARMUP
 
 cat > sitecustomize.py <<'EOF'
+# Dump every thread's stack on SIGUSR1. py-spy cannot be used here: vast.ai
+# containers are not given CAP_SYS_PTRACE, so it dies with "Failed to copy
+# Py_Version symbol: Permission denied". faulthandler needs no privileges
+# because the process dumps itself; output goes to stderr, i.e. the server log.
+try:
+    import faulthandler
+    import signal
+
+    faulthandler.register(signal.SIGUSR1, all_threads=True)
+except Exception as e:  # never let instrumentation break the server
+    print("[FAULTHANDLER] not installed:", e, flush=True)
 try:
     import dspark_pp_probe  # noqa: F401
 except Exception as e:
@@ -74,14 +85,16 @@ done
 echo "STATE=$STATE (after $((i*10))s)" | tee "$OUT/state.txt"
 
 if [ "$STATE" = "hung" ]; then
-  command -v py-spy >/dev/null || $PY -m pip install -q py-spy 2>/dev/null
-  PYSPY=$(command -v py-spy || echo /venv/nm/bin/py-spy)
-  for pid in $(pgrep -f "[V]LLM::" ) $(pgrep -f "[E]ngineCore"); do
-    NAME=$(tr '\0' ' ' < /proc/$pid/cmdline 2>/dev/null | cut -c1-90)
-    echo "=== pid=$pid $NAME" >> "$OUT/stacks.txt"
-    timeout 90 "$PYSPY" dump --pid "$pid" --locals >> "$OUT/stacks.txt" 2>&1
-    echo >> "$OUT/stacks.txt"
+  # Ask each worker to dump itself. The stacks land in its stderr, which is this
+  # same log, so record where to start reading from.
+  MARK=$(wc -l < "$LOG")
+  for pid in $(pgrep -f "[V]LLM::"); do
+    echo "=== signalling pid=$pid $(tr '\0' ' ' < /proc/$pid/cmdline 2>/dev/null | cut -c1-60)" \
+      >> "$OUT/stacks.txt"
+    kill -USR1 "$pid" 2>/dev/null
   done
+  sleep 15
+  tail -n +$((MARK + 1)) "$LOG" >> "$OUT/stacks.txt"
   nvidia-smi > "$OUT/nvidia-smi.txt" 2>&1
   # Are any CUDA kernels actually resident, or is everyone idle in a wait?
   nvidia-smi --query-gpu=index,utilization.gpu,memory.used --format=csv \

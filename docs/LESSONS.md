@@ -199,3 +199,12 @@ other three: `Watchdog caught collective operation timeout: WorkNCCL(SeqNum=1,
 OpType=BROADCAST)` on the `pp_broadcast` group — ranks 0-2 entered the sampled-
 token broadcast and the last rank never arrived. Count errors per rank before
 reading any of them; the quiet ranks name the collective.
+
+**29. py-spy needs a capability rented containers do not grant; faulthandler does not.**
+`py-spy dump` failed on every worker with `Failed to copy Py_Version symbol:
+Permission denied` — vast.ai containers run without `CAP_SYS_PTRACE`, and you
+cannot add a capability to a container that is already running. The portable
+substitute costs three lines in `sitecustomize.py`:
+`faulthandler.register(signal.SIGUSR1, all_threads=True)`, then `kill -USR1` the
+worker and read its own stderr. No privileges are involved because the process
+dumps itself, and it works anywhere Python runs.
