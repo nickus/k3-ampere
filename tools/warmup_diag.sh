@@ -50,6 +50,9 @@ nohup $PY -m vllm.entrypoints.openai.api_server \
 
 # Wait for either: server up (no hang — warmup fixed), or the log going quiet
 # after warmup was entered (the hang), or an outright crash.
+# Must fire well before NCCL's 600s watchdog, which SIGABRTs the workers and
+# takes the stacks with it. Warmup itself is minutes, so 300s is a safe middle.
+DEADLINE=${DEADLINE:-300}
 STALL=0; PREV=0; STATE=unknown
 for i in $(seq 1 120); do
   sleep 10
@@ -59,12 +62,14 @@ for i in $(seq 1 120); do
   if grep -qiE "Traceback|CUDA error|illegal memory|NotImplementedError" "$LOG"; then
     STATE=crashed; break
   fi
-  SZ=$(stat -c %s "$LOG" 2>/dev/null || echo 0)
-  if [ "$SZ" = "$PREV" ]; then STALL=$((STALL+1)); else STALL=0; PREV=$SZ; fi
-  # 90s of no new output and still not serving => hung. Deliberately NOT keyed on
-  # the probe's "ENTER warmup_kernels" marker: the point of this run is to work
-  # without instrumentation, and a stack tells us the phase anyway.
-  if [ "$STALL" -ge 9 ]; then STATE=hung; break; fi
+  # Deadline, not stall detection. A size-based stall counter looks obvious and
+  # does not work here: vLLM prints "No available shared memory broadcast block
+  # found in 60 seconds" on a timer, so the log keeps growing while nothing
+  # progresses, the counter resets every minute, and the run sails past the
+  # point worth sampling straight into the 600s NCCL watchdog — which kills the
+  # processes before any stack can be taken. Whatever the engine is doing, if it
+  # has not served in DEADLINE seconds it is stuck, and the stack says where.
+  if [ $((i * 10)) -ge "$DEADLINE" ]; then STATE=hung; break; fi
 done
 echo "STATE=$STATE (after $((i*10))s)" | tee "$OUT/state.txt"
 

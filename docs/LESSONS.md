@@ -180,3 +180,22 @@ version can then no longer be renegotiated — and letting the dependencies come
 from PyPI. Resolve the href from the index page instead of composing the path:
 the link is relative and points into a per-commit directory, so a hand-built
 URL 404s.
+
+**27. A periodic "still waiting" log line defeats stall detection.**
+The warmup watcher decided "hung" from the log file not growing for 90s. It
+never fired, because vLLM prints `No available shared memory broadcast block
+found in 60 seconds` on a timer: the file grew every minute while nothing
+progressed, the counter reset, and the run went straight past the point worth
+sampling into NCCL's 600s watchdog — which SIGABRTs the workers and takes the
+stacks with it. Detect by deadline ("not serving after N seconds is stuck"), not
+by silence, and make the deadline shorter than the watchdog that will destroy
+your evidence.
+
+**28. The rank that reports the error is usually not the rank that failed.**
+The loudest output came from the last rank: 77 error lines against 6-9 on the
+others, ending in `Connection closed by peer ... typically caused by a remote
+worker crashing`. That is the *victim*. The cause was one line from each of the
+other three: `Watchdog caught collective operation timeout: WorkNCCL(SeqNum=1,
+OpType=BROADCAST)` on the `pp_broadcast` group — ranks 0-2 entered the sampled-
+token broadcast and the last rank never arrived. Count errors per rank before
+reading any of them; the quiet ranks name the collective.
