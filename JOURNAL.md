@@ -228,9 +228,50 @@ commenter is blocked for lack of multi-GPU hardware, which we rent for cents.
 100-agent swarm that assumes speculation is unfounded. It does not affect
 correctness, and it does not affect the KV-offload result.
 
-### Status: patch written and statically verified, not yet run on GPUs
+### Status after running it on 2×3090: the core fix works, two pieces remain
 
-Reading the code turned up a **second** defect that the guard hides, and it is
+**It is not one guard — it is 13 obstacles in series**, six upstream and seven
+ours, each only visible once the previous is removed. Full map with file:line in
+[`docs/DSPARK_PP_LADDER.md`](docs/DSPARK_PP_LADDER.md). That ratio is itself the
+lesson: most of the cost was not the upstream fix but building an environment
+faithful enough to exercise it.
+
+**Proven on hardware: the taps now cross stage boundaries.** The evidence came
+from a failure message, not a green check:
+
+```
+RuntimeError: mat1 and mat2 shapes cannot be multiplied (2048x3072 and 4096x1024)
+```
+
+`context_proj` expected 4 taps (4 × 1024), got 3. With taps at layers 2, 3, 4
+under PP=2, layer 2 lives on **rank 0** — so one of those three arrived from the
+other GPU. Before the patch it was discarded at the boundary. A tensor dimension
+cannot be faked.
+
+**Two real upstream defects found by execution, not reading**: the tap dropping
+(above) and `dspark_mla.py:419`, where the draft offsets its layer names by the
+layer count *on this rank*, so under PP it collides with the target's own layers
+(`Duplicate layer name: model.layers.2.self_attn`) — invisible at PP=1 where the
+two counts coincide. Plus a robustness bug: optional usage telemetry can kill
+the engine ([vllm#51825](https://github.com/vllm-project/vllm/issues/51825)).
+
+**Not finished, and not to be overstated.** Gate 2 — tap fingerprints matching
+between PP=1 and PP=2 — has never run, so "they cross" is established but
+"they arrive intact and ordered" is not. And the embedding transfer is only
+worked around: `load_dspark_model` executes **only on the last rank**
+(`init_speculator` runs under `if self.is_last_pp_rank`), so no collective
+inside it can ever be symmetric — attempting one hangs the group. The draft rank
+currently builds an uninitialised placeholder with a loud warning, which
+exercises the plumbing and would produce meaningless draft tokens in
+production. The real fix must move the weight where every rank is present.
+
+Posted to [vllm#50098](https://github.com/vllm-project/vllm/issues/50098#issuecomment-5254101547)
+with the ladder and a direct question to maintainers about where that transfer
+belongs.
+
+### The patch itself, and what was verifiable without a GPU
+
+Reading the code turned up the **second** defect that the guard hides, and it is
 the more dangerous one. K3's DSpark draft is not standalone — it consumes
 auxiliary hidden states tapped from five target layers. In
 `KimiK3Model.forward`, a non-last rank returns
