@@ -39,14 +39,34 @@ sequence, stored as raw fp32 bytes — copy out, copy in, no reconstruction.
    assert. Passing `--block-size` sets it pre-fork, so all ranks agree by
    construction. Worth filing upstream.
 3. **`cpu_bytes_to_use`, not `num_cpu_blocks`** in
-   `kv_connector_extra_config` (`v1/kv_offload/cpu/spec.py:81-84`).
-4. **Upstream bug, one-line fix:**
-   `v1/worker/gpu/model_states/mamba_hybrid.py:306` calls
-   `index_fill_(0, idx_mapping, …)` with an **int32** index →
-   `RuntimeError: index_fill_(): Expected dtype int64 for index`. The
-   sibling branch uses a custom Triton kernel that accepts int32. This path
-   is chunked prefill, which align mode *requires*, so **any** hybrid model
-   with prefix caching hits it. Fix: `idx_mapping.long()`.
+   `kv_connector_extra_config` (`v1/kv_offload/cpu/spec.py:81-84`). Unknown
+   keys are silently ignored, so `num_cpu_blocks` looks accepted and then
+   fails on the missing required key.
+4. **A crash we patched locally, already fixed upstream.**
+   Our build (38a267cdd) had `v1/worker/gpu/model_states/mamba_hybrid.py:306`
+   calling `index_fill_(0, idx_mapping, …)` with an **int32** index →
+   `RuntimeError: index_fill_(): Expected dtype int64 for index`, on the
+   chunked-prefill path that align mode *requires*. We patched it with
+   `idx_mapping.long()` and it works.
+
+## Verified against fresh main (1a1727330a, 2026-08-10) before filing upstream
+
+Re-checking each finding against current main before opening issues killed two
+of the three. Recording that, because the earlier version of this file implied
+we had found three upstream bugs:
+
+| Finding | Status in main |
+|---|---|
+| index_fill_ int32 crash (#4 above) | **already fixed.** Both branches now go through Triton kernels — `_scatter_num_accepted_kernel` / `_fill_num_accepted_kernel` — which take int32 and handle `-1` sentinels, with an explicit comment about PP. Not our bug to report. |
+| `cpu_bytes_to_use` undocumented (#3) | **mostly documented.** `docs/features/kv_offloading_usage.md` (328 lines) now carries a full `kv_connector_extra_config` table, the tiering schema, the `fs` tier and its on-disk layout. Only "unknown keys are silently ignored" survives, which is too thin to file. That doc also documents `blocks_per_chunk` — "alternative to `block_size` for models whose KV cache groups have different block sizes" — i.e. a knob aimed squarely at hybrids that we did not know about and have not tried. |
+| PP alignment skipped on attention-less ranks (#2) | **still present**, `platforms/interface.py:624-626`. Filed as [vllm#51752](https://github.com/vllm-project/vllm/issues/51752). |
+
+The call site matters for #2 and was re-confirmed: `update_block_size_for_backend`
+runs **inside each worker process** after `load_model()`
+(`v1/executor/multiproc_executor.py:677`, `ray_executor.py:366`,
+`uniproc_executor.py:75`), so every rank aligns against only its own layers.
+It is a distinct bug from #50821/#50653 (which is about `num_cpu_blocks`
+diverging across ranks, one level later).
 
 ## Working launch recipe
 
