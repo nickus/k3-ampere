@@ -140,6 +140,86 @@ def warmup_kernels(""",
         "P7 bracket prefill sampling",
     )
 
+
+    # 3d. inside sample_tokens: the non-last rank waits in pp_handler.receive,
+    # the last rank must reach pp_handler.broadcast. Under speculation the last
+    # rank also runs the drafter inside self.sample(...), so bracket both.
+    runner = f"{sp}/vllm/v1/worker/gpu/model_runner.py"
+    patch(
+        runner,
+        """            assert self.pp_handler is not None
+            all_decode_next = self.pp_handler.receive(input_batch)""",
+        """            assert self.pp_handler is not None
+            _wm_mark("sample: BEFORE pp_handler.receive")
+            all_decode_next = self.pp_handler.receive(input_batch)
+            _wm_mark("sample: AFTER pp_handler.receive")""",
+        "P8 bracket receive on non-last rank",
+    )
+    patch(
+        runner,
+        """        sampler_output, num_sampled, num_rejected = self.sample(
+            hidden_states, input_batch, grammar_output
+        )""",
+        """        _wm_mark("sample: BEFORE self.sample (drafter runs here)")
+        sampler_output, num_sampled, num_rejected = self.sample(
+            hidden_states, input_batch, grammar_output
+        )
+        _wm_mark("sample: AFTER self.sample")""",
+        "P9 bracket sample on last rank",
+    )
+    patch(
+        runner,
+        """            self.pp_handler.broadcast(
+                sampler_output.sampled_token_ids,
+                num_sampled,
+                num_rejected,
+                input_batch,
+            )""",
+        """            _wm_mark("sample: BEFORE pp_handler.broadcast")
+            self.pp_handler.broadcast(
+                sampler_output.sampled_token_ids,
+                num_sampled,
+                num_rejected,
+                input_batch,
+            )
+            _wm_mark("sample: AFTER pp_handler.broadcast")""",
+        "P10 bracket broadcast on last rank",
+    )
+    # The helper must NOT be imported from warmup.py: warmup imports the runner,
+    # so a top-level import there is circular and the workers fail to start with
+    # a bare `resolve_obj_by_qualname` error. Define a private copy instead.
+    src = open(runner).read()
+    if "def _wm_mark(" not in src:
+        helper = '''
+
+def _wm_mark(where: str) -> None:  # probe (local copy; importing warmup is circular)
+    try:
+        from vllm.distributed.parallel_state import get_pp_group
+
+        print("[WM] rank=%d %s" % (get_pp_group().rank_in_group, where), flush=True)
+    except Exception:
+        print("[WM] rank=? %s" % where, flush=True)
+
+'''
+        marker = "\nclass "
+        i = src.index(marker)
+        src = src[:i] + helper + src[i:]
+        open(runner, "w").write(src)
+        print("  P11 helper: local copy added")
+
+
+    # 3e. bracket the speculator itself — rank 1 hangs inside self.sample, and
+    # propose() is where the drafter runs.
+    patch(
+        runner,
+        """            self.speculator.propose(
+                input_batch=input_batch,""",
+        """            _wm_mark("sample: BEFORE speculator.propose")
+            self.speculator.propose(
+                input_batch=input_batch,""",
+        "P12 bracket propose entry",
+    )
+
     # 2. announce the pipeline payload on both sides
     src = open(pp_utils).read()
     if "[PP] send keys=" not in src:
