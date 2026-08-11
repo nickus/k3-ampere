@@ -103,7 +103,30 @@ la["kda_layers"] = [1, 2, 3]
 la["full_attn_layers"] = [4]
 la["num_heads"] = 8
 tc.pop("quantization_config", None)
-c["auto_map"] = {"AutoConfig": "configuration_kimi_k3.KimiLinearConfig",
-                 "AutoModelForCausalLM": "modeling_kimi_linear.KimiLinearForCausalLM"}
-json.dump(c, open(f"{OUT}/config.json", "w"), indent=1)
-print("HF slice ready at", OUT)
+
+# Emit a FLAT, text-only config.
+#
+# The upstream K3 repo config is multimodal: architectures is
+# KimiK3ForConditionalGeneration and the language model lives under
+# "text_config". vLLM >= 0.27.0 knows that architecture, so shipping the outer
+# config verbatim (as this script used to) sends the slice down the multimodal
+# path: it demands preprocessor_config.json plus kimi_k3_vision_processing.py /
+# modeling_kimi_k3.py / kimi_k3_processor.py / media_utils.py, and then the
+# process gets OOM-killed building dummy weights for a full-size vision tower.
+# Older vLLM did not know the architecture and silently fell back to text-only,
+# which is why this only started failing on 2026-08-11.
+#
+# Naming the text-only architecture is necessary but NOT sufficient: the
+# kimi_k3 text path reads config.linear_attn_config directly, so a config still
+# nested under "text_config" fails with
+#   AttributeError: 'KimiK3Config' object has no attribute 'linear_attn_config'
+# Hence: promote text_config to the top level.
+flat = dict(tc)
+flat["architectures"] = ["KimiLinearForCausalLM"]
+flat["auto_map"] = {"AutoConfig": "configuration_kimi_k3.KimiLinearConfig",
+                    "AutoModelForCausalLM": "modeling_kimi_linear.KimiLinearForCausalLM"}
+for k in ("bos_token_id", "eos_token_id", "pad_token_id", "tie_word_embeddings",
+          "dtype"):
+    flat.setdefault(k, c.get(k))
+json.dump(flat, open(f"{OUT}/config.json", "w"), indent=1)
+print("HF slice ready at", OUT, "| arch:", flat["architectures"])
