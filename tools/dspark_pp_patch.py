@@ -56,6 +56,10 @@ def main(sp: str) -> None:
 
         # Taps produced by upstream PP stages, in layer order. Upstream ranks
         # own strictly lower layer indices, so carried + own stays sorted.
+        # The model also takes a tap at `start_layer` from the stage INPUT; on a
+        # non-first rank that value is the previous stage's output and was
+        # already tapped there, so it must not be taken twice.
+        _skip_boundary_tap = not get_pp_group().is_first_rank
         carried_aux: list[torch.Tensor] = []
         if intermediate_tensors is not None:
             _i = 0
@@ -63,6 +67,23 @@ def main(sp: str) -> None:
                 carried_aux.append(intermediate_tensors[f"{AUX_PREFIX}{{_i}}"])
                 _i += 1''',
         "B1 receive carried taps",
+    )
+
+
+    # ---- B5: do not take the boundary tap twice under PP.
+    # `KimiK3Model.forward` opens with a tap at `self.start_layer` taken from the
+    # stage INPUT. At PP=1 that never fires (aux ids are 1-based, start_layer is
+    # 0). Under PP it fires on every non-first rank — and the value it taps is
+    # the previous stage's output, which that stage already tapped. Left alone it
+    # produces one tap too many (5 where the draft wants 4) and desynchronises
+    # the send/recv counts.
+    patch(
+        model,
+        """        aux_hidden_states: list[torch.Tensor] = []
+        if self.start_layer in self.aux_hidden_state_layers:""",
+        """        aux_hidden_states: list[torch.Tensor] = []
+        if self.start_layer in self.aux_hidden_state_layers and not _skip_boundary_tap:""",
+        "B5 no double boundary tap",
     )
 
     # ---- B2: forward carried + own taps to the next stage
@@ -110,8 +131,14 @@ def main(sp: str) -> None:
         }}
         # One slot per tap produced strictly upstream of this stage. Computable
         # locally: no communication needed to agree on the payload shape.
+        # Taps produced strictly upstream. NOTE the <= : the tap whose id equals
+        # this stage's start_layer is the output of the previous stage's LAST
+        # layer, so the previous rank already produced it. Using < here made the
+        # receiver allocate one slot fewer than the sender sends, and the recv
+        # blocked forever (rank 1 never returns from execute_model while rank 0
+        # sails on into sampling).
         _n_upstream = sum(
-            1 for _L in self.aux_hidden_state_layers if _L < self.start_layer
+            1 for _L in self.aux_hidden_state_layers if _L <= self.start_layer
         )
         for _j in range(_n_upstream):
             _t[f"{AUX_PREFIX}{{_j}}"] = torch.zeros(
