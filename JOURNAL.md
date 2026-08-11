@@ -435,6 +435,8 @@ by experiment; the divergence happens before the connector is consulted.
 | `docs/REAP_ROUTE.md` | The 837 GB checkpoint that changes the plan |
 | `docs/DSPARK_PP_BLOCKER.md` | Why K3 has no speed lever, and how to build one |
 | `docs/RIG_NUMBERS_VERIFIED.md` | Exact per-session memory, PP blast radius |
+| `docs/LESSONS.md` | Twenty things worth knowing before starting this again |
+| `docs/DSPARK_PP_LADDER.md` | The 13-obstacle ladder behind one NotImplementedError |
 | `docs/UPSTREAM_FILING_RECORD.md` | What was filed, what evaporated on re-check |
 | `docs/CAPACITY_50x3090.md` | Original capacity arithmetic |
 | `docs/GAP_ANALYSIS.md` | The sm_86 gap analysis (15-agent, adversarial) |
