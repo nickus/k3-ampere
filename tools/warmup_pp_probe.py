@@ -67,6 +67,51 @@ def main(sp: str) -> None:
         "P1 warmup step announcer",
     )
 
+
+    # 3. milestones — stacks are unavailable in this container (ptrace blocked,
+    # faulthandler produced nothing), so mark progress instead. If a rank never
+    # prints a milestone, the hang is before it.
+    patch(
+        warmup,
+        """def warmup_kernels(""",
+        """def _wm_mark(where: str) -> None:
+    try:
+        from vllm.distributed.parallel_state import get_pp_group
+
+        print("[WM] rank=%d %s" % (get_pp_group().rank_in_group, where), flush=True)
+    except Exception:
+        print("[WM] rank=? %s" % where, flush=True)
+
+
+def warmup_kernels(""",
+        "P3 milestone helper",
+    )
+
+
+    # 3b. mark entry, and mark the boundary between prefill and decode warmup
+    patch(
+        warmup,
+        """    if model_runner.is_encoder_only:
+        return
+
+    num_spec_steps = model_runner.num_speculative_steps""",
+        """    if model_runner.is_encoder_only:
+        return
+
+    _wm_mark("ENTER warmup_kernels")
+    num_spec_steps = model_runner.num_speculative_steps""",
+        "P4 mark warmup entry",
+    )
+    patch(
+        warmup,
+        """        all_indices = list(range(num_reqs))
+        use_spec_decode = num_spec_steps > 0""",
+        """        _wm_mark("PREFILL PHASE DONE, entering decode steps")
+        all_indices = list(range(num_reqs))
+        use_spec_decode = num_spec_steps > 0""",
+        "P5 mark prefill/decode boundary",
+    )
+
     # 2. announce the pipeline payload on both sides
     src = open(pp_utils).read()
     if "[PP] send keys=" not in src:
