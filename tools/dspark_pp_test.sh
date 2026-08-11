@@ -10,6 +10,10 @@
 # is not evidence of anything.
 cd /workspace/k3
 PY=/venv/nm/bin/python
+# PP degree under test. PP=2 has no MIDDLE rank, so it never exercises the
+# receive-and-forward branch this patch adds — that needs PP>=3, which is what
+# 45 of 47 ranks do on the target rig. Pass PPN=4 on a 4-GPU box.
+PPN=${PPN:-2}
 export PYTHONPATH=/workspace/k3
 export VLLM_USE_V2_MODEL_RUNNER=1 VLLM_DSPARK_PROBE=1
 # vLLM's optional usage telemetry calls py-cpuinfo, which can raise
@@ -49,12 +53,13 @@ ask() {
     | $PY -c "import sys,json; d=json.load(sys.stdin); print(d['choices'][0]['text'])" 2>/dev/null
 }
 
-echo "##### GATE 1: boot at PP=2"
-if serve pp2 2; then echo "GATE1 PASS"; else
+echo "##### GATE 1: boot at PP=$PPN"
+if serve pp2 "$PPN"; then echo "GATE1 PASS"; else
   echo "GATE1 FAIL"; grep -iE "NotImplementedError|Error|assert" srv_pp2.log | tail -5 | cut -c1-200; exit 1
 fi
 OUT_PP2=$(ask); grep "DSPARK_PROBE.*shape" srv_pp2.log | head -3 > probe_pp2.txt
 echo "  taps seen: $(grep -c 'DSPARK_PROBE.*shape' srv_pp2.log)"
+echo "  middle ranks exercised: $(( PPN > 2 ? PPN - 2 : 0 ))"
 pkill -9 -f "[a]pi_server" 2>/dev/null; sleep 5
 
 echo "##### reference: PP=1"

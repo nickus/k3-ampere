@@ -213,6 +213,48 @@ def main(sp: str) -> None:
     )
 
 
+
+    # ---- A6: TRITON_MLA decode faults under speculative decoding.
+    # Measured at the fault site:
+    #   [MQA] causal=True q=(768,8,576) bt=(256,8) sl=(256,) ndecodes=256 ndtok=768
+    # `q` carries one row per decode TOKEN (768) while `block_table` carries one
+    # row per SEQUENCE (256) — query_len is 3. Upstream expands the tables only
+    # under `if not attn_metadata.causal`, so on the causal path (ordinary
+    # spec-decode verification) the kernel indexes 512 rows past the end of
+    # block_table: `Triton Error [CUDA]: an illegal memory access`.
+    #
+    # Flattening one row per query token is already upstream's own approach for
+    # the non-causal block; causal only differs in that row j must see a prefix
+    # ending at its own position, i.e. seq_len - (query_len - 1 - j). With that,
+    # each row is an independent query over its own prefix, which IS causal
+    # semantics — no extra masking needed.
+    #
+    # This is why speculative decoding cannot work on sm_86 at all today:
+    # TRITON_MLA is the only MLA decode backend Ampere has.
+    mla_backend = f"{sp}/vllm/v1/attention/backends/mla/triton_mla.py"
+    patch(
+        mla_backend,
+        """        block_table = attn_metadata.decode.block_table
+        seq_lens = attn_metadata.decode.seq_lens
+        if not attn_metadata.causal:""",
+        """        block_table = attn_metadata.decode.block_table
+        seq_lens = attn_metadata.decode.seq_lens
+        if attn_metadata.causal and attn_metadata.num_decodes:
+            _qlen = attn_metadata.num_decode_tokens // attn_metadata.num_decodes
+            if _qlen > 1:
+                # Causal multi-token decode (speculative verification): give each
+                # query token its own row and its own prefix length.
+                block_table = block_table.repeat_interleave(_qlen, dim=0)
+                _off = torch.arange(
+                    _qlen, device=seq_lens.device, dtype=seq_lens.dtype
+                ) - (_qlen - 1)
+                seq_lens = seq_lens.repeat_interleave(_qlen) + _off.repeat(
+                    attn_metadata.num_decodes
+                )
+        if not attn_metadata.causal:""",
+        "A6 TRITON_MLA: expand tables for causal multi-token decode",
+    )
+
     # ---- A5: the embedding handoff, done where EVERY rank executes.
     # `load_dspark_model` runs only on the last PP rank (init_speculator sits
     # under `if self.is_last_pp_rank`), so no collective inside it can be

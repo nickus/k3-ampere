@@ -51,8 +51,14 @@ def build(slice_cfg: dict, draft_layers: int = DRAFT_LAYERS) -> dict:
         # occur in any real checkpoint. Copying q_lora_rank=1536 verbatim onto
         # a 1024-wide slice (the real draft is 1536 against 7168) produced
         # `Triton Error [CUDA]: an illegal memory access was encountered`.
+        # q_lora_rank is a plain projection width and MUST stay below the model
+        # width (1536 against a 1024-wide slice caused an illegal memory access).
         "q_lora_rank": max(256, min(1536, h // 2)),
-        "kv_lora_rank": max(128, min(512, h // 4)),
+        # kv_lora_rank is NOT free to scale: it is baked into the fused
+        # K3 MLA decode kernel's input checks. Lowering it to 256 produced
+        #   RuntimeError: check_decode_inputs, fused_kimi_k3_mla_key_concat_kv_cache_kernel.cu
+        # Keep it at the production value, like the slice itself does.
+        "kv_lora_rank": 512,
         "qk_nope_head_dim": 128,
         "qk_rope_head_dim": 64,
         "v_head_dim": 128,
