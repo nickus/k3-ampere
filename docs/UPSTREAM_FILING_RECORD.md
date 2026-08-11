@@ -13,6 +13,19 @@ not survive.** One issue filed, not three.
 | 2 | Hybrid block-size alignment skipped on PP ranks with no attention layer | **Still present** | Filed: [vllm#51752](https://github.com/vllm-project/vllm/issues/51752) |
 | 3 | `cpu_bytes_to_use` vs `num_cpu_blocks`, tiering schema undiscoverable | **Now documented upstream** | Not filed |
 
+## CORRECTION 2026-08-11 (later the same day): #1 is fixed on main but NOT in the newest release
+
+vLLM **0.27.0 was released 2026-08-10** — one day before this work. Installing
+it on a clean box and inspecting the tree shows it **still contains
+`index_fill_(0, idx_mapping, …)`** and has **none** of the Triton kernels that
+replaced it. So the fix exists only on unreleased main; every user on the
+current stable release still hits the crash.
+
+"Already fixed upstream, not our bug to report" was therefore too strong. The
+accurate statement: fixed on main, present in 0.27.0. For us this is
+load-bearing — if we pin a release rather than main, our `.long()` patch is
+still required.
+
 ## Why #1 was dropped
 
 Our build crashed in `postprocess_state`:
