@@ -68,6 +68,52 @@ runs **inside each worker process** after `load_model()`
 It is a distinct bug from #50821/#50653 (which is about `num_cpu_blocks`
 diverging across ranks, one level later).
 
+## Long-context restore sweep (2×3090, PP=2, bf16 KV, 256 MB CPU tier + NVMe fs tier)
+
+GPU KV capped at 160 blocks × 512 = 81,920 tokens. Each row: cold prefill →
+5 same-size filler prompts (evicts it from GPU) → `posix_fadvise(DONTNEED)` on
+every tier file (drops page cache without root; `drop_caches` is unavailable in
+the container) → restore call → one more call to read the GPU-resident upper
+bound. `diskMB` is the delta of the server processes' `read_bytes` in
+`/proc/<pid>/io`, i.e. bytes that actually came off the drive.
+
+| words | prompt tok | cold s | restore s | GPU-hit s | cold tok/s | restore tok/s | speedup | disk MB | MB/s | max Δlogprob |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1400 | 4,063 | 0.08 | 0.04 | 0.04 | 52,327 | 97,654 | 1.87× | 0.0 | – | **0.000000** |
+| 2800 | 8,107 | 0.08 | 0.06 | 0.06 | 100,476 | 144,730 | 1.44× | 0.0 | – | **0.000000** |
+| 5600 | 16,247 | 0.12 | 0.10 | 0.07 | 138,274 | 167,004 | 1.21× | 0.0 | – | **0.000000** |
+| 9800 | 28,417 | 0.21 | 0.16 | 0.12 | 132,937 | 173,206 | 1.30× | 79.0 | 482 | **0.000000** |
+
+Tier total after the sweep: 939 MB in 797 files on NVMe.
+
+**What this establishes.** Bit-exactness holds all the way to 28,417 tokens —
+`max Δlogprob = 0.00000000` at every size, including the row that provably came
+off the disk. The KDA recurrent state survives a full evict/restore round trip
+at long context, which was the load-bearing correctness question.
+
+**What this does NOT establish — read this before quoting the speedups.** The
+1.2–1.9× numbers are a *floor artifact of the test model*, not the expected
+win. This is a 4-layer dummy-weight slice whose prefill runs at ~130k tok/s;
+there is almost nothing to save by skipping it. Real K3 is 93 layers with 104B
+active parameters, so prefill costs orders of magnitude more per token, while
+restore cost scales only with KV bytes. The speedup on the real model is
+`prefill_time / restore_time` with a numerator that grows enormously and a
+denominator that grows only with layer count — this slice cannot measure it.
+
+**Tiering behaved correctly.** Only the largest prompt read from disk; the
+smaller ones were served by the 256 MB CPU tier. That is the intended
+RAM-first / NVMe-overflow cascade, confirmed rather than assumed.
+
+**On the 482 MB/s.** That is a shared vast.ai virtual disk under a live
+inference process, so treat it as a floor on plumbing throughput, not as NVMe
+bandwidth. A dedicated Gen4 ×4 drive is ~7 GB/s. Extrapolating a 1M-token K3
+session (fp8: 656 B × 24 MLA layers × 1M ≈ 15.7 GB, plus ~448 MB KDA state):
+≈ 33 s at the measured 482 MB/s, ≈ 2.3 s on one dedicated 7 GB/s drive, and
+well under a second when the read is striped across per-node drives and the 24
+MLA-owning ranks pull their shares in parallel. Against re-prefilling 1M tokens
+this remains two to three orders of magnitude cheaper — but the per-node NVMe
+layout is now a **design requirement**, not a detail.
+
 ## Working launch recipe
 
 ```bash
@@ -108,6 +154,17 @@ Per session, real K3: MLA KV = 656 B × 24 layers × 1M = **15.7 GB**
   **15+ minutes** to re-prefill 1M tokens. Two to three orders of magnitude.
 
 ## Honest gaps before this is a production claim
+
+0. **These results were produced on a vLLM pinned 11 days behind main**
+   (38a267cdd, 2026-07-30; main was 1a1727330a, 2026-08-10 — at least 50
+   commits). The pin was deliberate: the from-source build on that box was
+   expensive to get working, and the fp8-KV port and patches were developed
+   against it. The cost showed up immediately — two of three "upstream bugs"
+   we thought we had found were already fixed in main. Nothing here is
+   *invalidated* by the age (the bit-exact restore, the fp8-KV port, and the
+   PP alignment bug all hold on main), but **the offload stack must be
+   re-validated on a current main before the rig depends on it**, and the
+   local `index_fill_ .long()` patch must be dropped when we move.
 
 1. **Weights, not KV, are the binding constraint.** Full K3 MXFP4 is
    ~1601 GB and does not fit 50 cards; this projection assumes a ~883 GB
