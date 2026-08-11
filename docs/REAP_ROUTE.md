@@ -43,6 +43,18 @@ pruning stacked on top of 4-bit quantization, reported near-lossless on code.
 Compare with the 2-bit route, where quality is unmeasured and the only known
 A/B (a homemade K3-Q2 vs GLM-5.2 Q5) went against us.
 
+## It also removes our dependency on a stalled upstream PR
+
+The W2 route needed 2-bit MoE serving, which upstream gates behind
+[PR #48918](https://github.com/vllm-project/vllm/pull/48918)
+("[CT] Support Humming for WNA16 MoE"). As of 2026-08-11 that PR is **open,
+last touched 2026-07-22, flagged `mergeable_state: dirty` for merge conflicts,
+with seven requested reviewers and zero approvals**. Our whole W2 plan sat on
+top of it.
+
+REAP-448 is **MXFP4 → Marlin W4A16**, a path already in released vLLM and
+already exercised on our own hardware. No dependency on #48918 at all.
+
 ## Capacity arithmetic
 
 REAP-448 halves the MoE layer: 15.72 GB packed at 896 experts → **≈7.9 GB at
@@ -79,6 +91,27 @@ sessions. REAP-384 buys a further 105 GB of resident KV for 8% more pruning.
 `REAP640` / `REAP576` / `REAP-320` name the **kept** expert count.
 `REAP50` names the **pruned percentage** (so REAP50 = 448 kept). Do not compare
 vendors by the number in the name.
+
+## What M0 would cost (researched 2026-08-11, live marketplace prices)
+
+For a ~6 hour quality run:
+
+| Route | Instance | $/hr | ~total |
+|---|---|---|---|
+| CPU + GGUF, tight RAM | vast.ai, 1032 GB RAM | $3.91 | **≈$28** |
+| CPU + GGUF, comfortable RAM | vast.ai, 1156 GB RAM | $13.28 | ≈$90 |
+| GPU + safetensors (the real artifact) | vast.ai 4×B300, 1100 GB VRAM | $30.25 | ≈$200 |
+| GPU + safetensors | 8×H200 (vast/RunPod) | $31.58–35.12 | ≈$226–232 |
+
+vast.ai bills per second and has an interruptible/bid tier — an opportunistic
+1032 GB-RAM host was seen at $0.80/hr during the survey (~$8 for the whole job),
+but that is a snapshot, not a plan.
+
+The honest trade: **$28–90 tests a GGUF proxy** (e.g. `mmnga-o/Kimi-K3-REAP50-UD-gguf`,
+which is the same 448-expert cut but *further* squeezed to Q2 — two lossy steps
+stacked), while **≈$200 tests the artifact we would actually serve**
+(REAP-448 at MXFP4). Given that the entire point of M0 is deciding whether to
+spend ~€3k on more cards, testing the real artifact is the better $200.
 
 ## Recommended next step
 
