@@ -19,11 +19,24 @@ apt-get install -y -qq python3-venv python3-pip git curl >/dev/null 2>&1 || true
 echo "=== [2/6] venv + vLLM nightly (cu130)"
 [ -d "$VENV" ] || python3 -m venv "$VENV"
 "$VENV/bin/pip" install -q --upgrade pip >/dev/null 2>&1 || true
+NIGHTLY=https://wheels.vllm.ai/nightly/cu130
 if ! "$VENV/bin/python" -c "import vllm" 2>/dev/null; then
-  # Force the nightly index. `pip install vllm --pre` resolves to the RELEASE,
-  # which has bitten us twice; --index-url (not --extra-index-url) is the fix,
-  # because an extra index lets PyPI win.
-  "$VENV/bin/pip" install -q --index-url https://wheels.vllm.ai/nightly/cu130 vllm
+  # Getting this right took three attempts, so the reasoning stays here:
+  #   * `pip install vllm --pre`            -> resolves to the RELEASE (twice bitten)
+  #   * `--index-url $NIGHTLY` alone        -> vLLM's own deps (regex, ...) 404,
+  #                                            the nightly index hosts only vLLM
+  #   * `--extra-index-url $NIGHTLY`        -> PyPI wins again, because the release
+  #                                            version sorts above 0.26.1rc1.devNNN
+  # So: pin the wheel by its exact URL (version can no longer be renegotiated)
+  # and let the dependencies resolve from PyPI as usual. The href in the index
+  # is relative and points at a per-commit directory, so resolve it rather than
+  # constructing the URL by hand — a hand-built path 404s.
+  REL=$(curl -s "$NIGHTLY/vllm/" | grep -oE 'href="[^"]+x86_64\.whl"' | tail -1 |
+        sed 's/href="//; s/"//')
+  [ -n "$REL" ] || { echo "cannot find a nightly wheel at $NIGHTLY"; exit 1; }
+  URL=$(python3 -c "import urllib.parse;print(urllib.parse.urljoin('$NIGHTLY/vllm/','$REL'))")
+  echo "wheel: $URL"
+  "$VENV/bin/pip" install -q --extra-index-url "$NIGHTLY" "$URL"
 fi
 "$VENV/bin/pip" install -q py-spy >/dev/null 2>&1 || true
 

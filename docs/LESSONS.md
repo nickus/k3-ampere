@@ -169,3 +169,14 @@ box reported `running` the whole time, so only an explicit check on
 `cuda_max_good` caught it before an hour of installs. Every other 4×3090 offer
 on the market had ≥ 12.8, so this was one bad host, not a market constraint.
 Add `cuda_max_good` to the filter next to `inet_down` and `reliability2`.
+
+**26. The nightly index hosts vLLM and nothing else — pin the wheel by URL.**
+Three failed installs in a row, each for a different reason: `--pre` resolves to
+the release; `--index-url <nightly>` alone 404s on vLLM's own dependencies
+(`regex`), because that index carries only vLLM; and `--extra-index-url
+<nightly>` hands the decision back to PyPI, whose release version sorts above
+`0.26.1rc1.devNNN`. What works is pinning the wheel by its exact URL — the
+version can then no longer be renegotiated — and letting the dependencies come
+from PyPI. Resolve the href from the index page instead of composing the path:
+the link is relative and points into a per-commit directory, so a hand-built
+URL 404s.
