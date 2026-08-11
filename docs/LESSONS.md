@@ -1,4 +1,4 @@
-# Twenty things I would tell myself before starting this again
+# Things I would tell myself before starting this again
 
 Written 2026-08-11, after bringing up Kimi-K3 on Ampere, proving KV offload, and
 getting DSpark half-working under pipeline parallelism. Every item cost
@@ -149,3 +149,23 @@ Three well-argued hypotheses died in one session — speculation depth, EPLB, an
 decode-step asymmetry. Every one of them would have cost a run to "fix". Each
 probe, by contrast, answered in a single run: the MLA diagnosis, the proof that
 taps cross ranks, and the localisation of the hang to the prefill phase.
+
+**24. Correct your own overclaim before someone else has to.**
+The scope sentence in vllm#51848 ("spec decode is unusable for MLA models on
+every Ampere card") was broader than what the code does: an ordinary MLA model
+keeps `reorder_batch_threshold = 1`, so its multi-token queries are classified
+as prefills and never reach the faulty decode path. Nobody had challenged it —
+I found it by tracing the root cause *after* filing, because the report mattered
+enough to audit. The same correction lands as rigour when it comes from the
+author and as sloppiness when it comes from a reviewer. Publishing it also paid:
+the trace showed the proposed fix's uniform-query-length assumption is
+*enforced* upstream (`require_uniform=(query_len_support != VARLEN)`), which
+turned the weakest point of the patch into its strongest.
+
+**25. Filter rented boxes by driver version, not just GPU model.**
+A 4×3090 box rented on price and bandwidth came with driver 535 / CUDA 12.2.
+Nightly vLLM ships CUDA 13 wheels, so nothing would have run on it — and the
+box reported `running` the whole time, so only an explicit check on
+`cuda_max_good` caught it before an hour of installs. Every other 4×3090 offer
+on the market had ≥ 12.8, so this was one bad host, not a market constraint.
+Add `cuda_max_good` to the filter next to `inet_down` and `reliability2`.

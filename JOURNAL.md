@@ -202,10 +202,51 @@ single GPU**. So it was never a PP problem. `TritonMLAImpl.forward_mqa` expands
 on the causal path — ordinary speculative verification — the kernel reads past
 the end of `block_table`. Probe output at the fault site:
 `causal=True q=(768,8,576) bt=(256,8) ndecodes=256 ndtok=768`, i.e. 768 query
-rows against 256 table rows. TRITON_MLA is the only MLA decode backend Ampere
-has, so this closed speculative decoding for **every** sm_80/86/89 user of MLA
-models. Invisible on Hopper, which runs different kernels. Filed as
+rows against 256 table rows. Filed as
 [vllm#51848](https://github.com/vllm-project/vllm/issues/51848).
+
+**Correction, 2026-08-11 (night): I first wrote that this closed speculative
+decoding for *every* sm_80/86/89 user of MLA models. That is too broad, and I
+corrected it on the issue myself before a maintainer could.** An ordinary MLA
+model + spec decode on Ampere is unaffected. Root cause, traced statically
+against upstream `1a17273`:
+
+1. `TritonMLAMetadataBuilder` never overrides `query_len_support`, so it
+   inherits `SINGLE_ONLY`. The base builder therefore computes
+   `supports_spec_decode = False`, sets `reorder_batch_threshold = 1`, and
+   asserts that pairing (`mla_attention.py:2128-2136`). The assert passes.
+2. The subclass then raises the threshold to `1 + num_speculative_tokens`
+   **after** `super().__init__()` has already run that assert
+   (`triton_mla.py:63-64`), but only when the group is flagged
+   `non_causal_multi_token_decode` — i.e. a DSpark draft group. The builder now
+   advertises "single-token only" while admitting multi-token decodes. Its own
+   comment says *"Causal usage stays single-token"*; nothing enforces it,
+   because the threshold belongs to the builder, not to the batch.
+3. `build()` splits the **causal** batch with that raised threshold
+   (`mla_attention.py:2223-2228`), so causal `query_len > 1` requests become
+   decodes.
+4. `forward_mqa` expands the tables only under `if not attn_metadata.causal:`
+   (`triton_mla.py:288-296`).
+5. The kernel takes its grid's batch axis from `q.shape[0]`, not from the
+   tables (`triton_decode_attention.py:510-519`), then does
+   `tl.load(B_Seqlen + cur_batch)` (`:329`). Rows `>= num_decodes` read out of
+   bounds.
+
+For a plain MLA model the threshold stays 1, so `split_decodes_and_prefills`
+routes every multi-token query to the **prefill** path and the decode kernel is
+never entered. So the correct scope is: any attention group that raises its
+threshold through the non-causal multi-token route — today, DSpark drafts — and
+on Ampere there is no escape, because TRITON_MLA is the only MLA backend whose
+`supports_compute_capability` admits `major == 8` (CUTLASS/FlashInfer MLA want
+10, FlashAttn MLA wants 9, FlashMLA wants 9 or 10). Invisible on Hopper, which
+runs different kernels.
+
+One thing the trace *strengthened*: the proposed fix divides
+`num_decode_tokens // num_decodes`, which assumes a uniform query length. That
+assumption is not mine — it is enforced upstream, because the split runs with
+`require_uniform=(query_len_support != VARLEN)` and TRITON_MLA is `SINGLE_ONLY`
+(`mla_attention.py:2226`). Non-uniform requests are pushed to the prefill side.
+The division is exact for every batch that can reach the code.
 
 Still open under PP: the engine completes a forward (the draft demonstrably
 receives all four taps, two of them computed on the other rank) and then hangs

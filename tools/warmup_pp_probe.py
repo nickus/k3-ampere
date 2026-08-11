@@ -220,6 +220,39 @@ def _wm_mark(where: str) -> None:  # probe (local copy; importing warmup is circ
         "P12 bracket propose entry",
     )
 
+
+    # 3f. inside sample(): three candidates for the warmup hang — computing
+    # logits, applying the grammar bitmask (warmup builds an all-ones mask on
+    # the last rank specifically to exercise that kernel), and sampling.
+    patch(
+        runner,
+        """        sample_hidden_states = hidden_states[input_batch.logits_indices]
+        logits = self.model.compute_logits(sample_hidden_states)""",
+        """        sample_hidden_states = hidden_states[input_batch.logits_indices]
+        _wm_mark("sample(): BEFORE compute_logits")
+        logits = self.model.compute_logits(sample_hidden_states)
+        _wm_mark("sample(): AFTER compute_logits")""",
+        "P13 bracket compute_logits",
+    )
+    patch(
+        runner,
+        """            assert self.structured_outputs_worker is not None
+            self.structured_outputs_worker.apply_grammar_bitmask(""",
+        """            assert self.structured_outputs_worker is not None
+            _wm_mark("sample(): BEFORE apply_grammar_bitmask")
+            self.structured_outputs_worker.apply_grammar_bitmask(""",
+        "P14 bracket grammar bitmask",
+    )
+    patch(
+        runner,
+        """        if input_batch.num_draft_tokens == 0 or self.rejection_sampler is None:
+            assert self.sampler is not None""",
+        """        _wm_mark("sample(): BEFORE sampler (draft_tokens=%s)" % input_batch.num_draft_tokens)
+        if input_batch.num_draft_tokens == 0 or self.rejection_sampler is None:
+            assert self.sampler is not None""",
+        "P15 bracket sampler choice",
+    )
+
     # 2. announce the pipeline payload on both sides
     src = open(pp_utils).read()
     if "[PP] send keys=" not in src:
