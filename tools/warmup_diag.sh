@@ -18,6 +18,13 @@ rm -rf "$OUT"; mkdir -p "$OUT"
 export PYTHONPATH=/workspace/k3
 export VLLM_USE_V2_MODEL_RUNNER=1 VLLM_DSPARK_PROBE=1
 export VLLM_NO_USAGE_STATS=1 DO_NOT_TRACK=1
+# FlashInfer's sampler is JIT-built on first use, on the LAST PP rank only,
+# while every other rank sits blocked in pp_handler.receive. On an image
+# without nvcc/ninja the build cannot even start (FileNotFoundError: 'ninja')
+# and the whole engine dies inside warmup; with a toolchain present it is a
+# multi-minute compile that is indistinguishable from a deadlock. The torch
+# sampler is correct and needs no toolchain.
+export VLLM_USE_FLASHINFER_SAMPLER=0
 # NOTE: SKIP_KERNEL_WARMUP is deliberately NOT set — the hang is the subject.
 unset SKIP_KERNEL_WARMUP
 

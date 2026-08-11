@@ -19,6 +19,13 @@ export VLLM_USE_V2_MODEL_RUNNER=1 VLLM_DSPARK_PROBE=1
 # vLLM's optional usage telemetry calls py-cpuinfo, which can raise
 # JSONDecodeError inside a forked worker and take the whole engine down.
 export VLLM_NO_USAGE_STATS=1 DO_NOT_TRACK=1
+# FlashInfer's sampler is JIT-built on first use, on the LAST PP rank only,
+# while every other rank sits blocked in pp_handler.receive. On an image
+# without nvcc/ninja the build cannot even start (FileNotFoundError: 'ninja')
+# and the whole engine dies inside warmup; with a toolchain present it is a
+# multi-minute compile that is indistinguishable from a deadlock. The torch
+# sampler is correct and needs no toolchain.
+export VLLM_USE_FLASHINFER_SAMPLER=0
 
 cat > sitecustomize.py <<'EOF'
 try:
@@ -57,21 +64,36 @@ echo "##### GATE 1: boot at PP=$PPN"
 if serve pp2 "$PPN"; then echo "GATE1 PASS"; else
   echo "GATE1 FAIL"; grep -iE "NotImplementedError|Error|assert" srv_pp2.log | tail -5 | cut -c1-200; exit 1
 fi
-OUT_PP2=$(ask); grep "DSPARK_PROBE.*shape" srv_pp2.log | head -3 > probe_pp2.txt
+MARK_PP2=$(grep -c "DSPARK_PROBE.*shape" srv_pp2.log)
+OUT_PP2=$(ask)
+# Compare only the taps produced by the REQUEST, and only the numeric payload:
+# the line prefix carries the rank name and pid ("Worker_PP3 pid=6801"), which
+# differ by construction, so a whole-line diff can never pass at PP>1. Warmup
+# taps are excluded too — at PP>1 the receiving rank sees a zero-filled buffer
+# for them, which is correct but not comparable to PP=1.
+grep "DSPARK_PROBE.*shape" srv_pp2.log | tail -n +$((MARK_PP2 + 1)) |
+  sed 's/.*\[DSPARK_PROBE\] //' > probe_pp2.txt
 echo "  taps seen: $(grep -c 'DSPARK_PROBE.*shape' srv_pp2.log)"
 echo "  middle ranks exercised: $(( PPN > 2 ? PPN - 2 : 0 ))"
 pkill -9 -f "[a]pi_server" 2>/dev/null; sleep 5
 
 echo "##### reference: PP=1"
 if serve pp1 1; then echo "PP1 boots"; else echo "PP1 FAIL"; exit 1; fi
-OUT_PP1=$(ask); grep "DSPARK_PROBE.*shape" srv_pp1.log | head -3 > probe_pp1.txt
+MARK_PP1=$(grep -c "DSPARK_PROBE.*shape" srv_pp1.log)
+OUT_PP1=$(ask)
+grep "DSPARK_PROBE.*shape" srv_pp1.log | tail -n +$((MARK_PP1 + 1)) |
+  sed 's/.*\[DSPARK_PROBE\] //' > probe_pp1.txt
 pkill -9 -f "[a]pi_server" 2>/dev/null
 
 echo "##### GATE 2: tap fingerprints must match"
-if diff -q probe_pp1.txt probe_pp2.txt >/dev/null 2>&1; then
-  echo "GATE2 PASS - taps identical across PP"
+if [ ! -s probe_pp1.txt ] || [ ! -s probe_pp2.txt ]; then
+  # An empty file would make `diff` succeed and report a pass on no evidence.
+  echo "GATE2 FAIL - no request taps captured (PP1=$(wc -l < probe_pp1.txt), PP$PPN=$(wc -l < probe_pp2.txt))"
+elif diff -q probe_pp1.txt probe_pp2.txt >/dev/null 2>&1; then
+  echo "GATE2 PASS - request taps identical at PP=1 and PP=$PPN ($(wc -l < probe_pp1.txt) taps)"
+  cat probe_pp1.txt
 else
-  echo "GATE2 FAIL - taps differ:"; echo "--- PP=1:"; cat probe_pp1.txt; echo "--- PP=2:"; cat probe_pp2.txt
+  echo "GATE2 FAIL - taps differ:"; echo "--- PP=1:"; cat probe_pp1.txt; echo "--- PP=$PPN:"; cat probe_pp2.txt
 fi
 
 echo "##### GATE 3: output parity + drafts accepted"
