@@ -9,6 +9,10 @@
 #     reason anyone runs a pipeline.
 # So v2 measures decode TPOT (prefill excluded by construction) and sweeps
 # concurrency until the pipeline is actually full.
+# NOTE: no --no-async-scheduling. Only AsyncScheduler assigns
+# next_decode_eligible_step, which is what keeps a request's decodes pp_size
+# apart under PP; the base scheduler reads that field and never sets it. With the
+# flag on, spec decode under PP reads the sampled-token ring out of phase.
 set -u
 cd /workspace/k3
 MODEL=${MODEL:-/workspace/models/glm45air}
@@ -27,7 +31,7 @@ serve() {  # serve <pp> <spec yes|no> <k>
   pkill -9 -f "[a]pi_server" 2>/dev/null; pkill -9 -f "[V]LLM::" 2>/dev/null; sleep 8
   local args=(--model "$MODEL" --served-model-name m --trust-remote-code
     --pipeline-parallel-size "$1" --tensor-parallel-size 1
-    --enable-prefix-caching --max-model-len 8192 --no-async-scheduling
+    --enable-prefix-caching --max-model-len 8192
     --max-num-seqs 16
     --gpu-memory-utilization 0.90 --enforce-eager --port $PORT)
   [ "$2" = yes ] && args+=(--speculative-config "{\"method\":\"mtp\",\"num_speculative_tokens\":$3}")

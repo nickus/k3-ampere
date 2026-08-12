@@ -1130,3 +1130,62 @@ acceptance counter is not, and one prompt in eight still diverges
 deterministically between spec-on and spec-off. That last one is the open item -
 lossless greedy speculation must not change any output - and it is the reason
 1.577x is reported here with the caveat attached rather than as a headline.
+
+---
+
+# Final matrix, both models, async scheduling ON
+
+## The flag cost throughput too, not just correctness
+
+GLM-4.5-Air AWQ, PP=4, spec off, concurrency 1, decode TPOT:
+
+```
+--no-async-scheduling : 94.60 ms
+async scheduling on   : 48.77 ms      1.94x, for removing one flag
+```
+
+Everything measured earlier in this session with that flag understated the
+baseline by roughly half.
+
+## GLM-4.5-Air AWQ + mtp, PP=4 on 4x3090
+
+```
+conc   spec off            spec on              ratio
+  1    48.77, 49.04 ms     138.79, 138.59 ms    0.35x   (2.84x SLOWER)
+  4    56.83, 46.98 ms     100.46,  99.65 ms    0.52x
+  8    56.39, 56.67 ms      99.91,  73.65 ms    0.65x
+mean acceptance length: 1.00
+```
+
+Acceptance 1.00 means no draft is ever accepted, so speculation is pure overhead:
+the engine pays for a draft pass plus verifying k+1 positions and banks one
+token. Here the counter and the clock agree, which is why this number is usable
+where the K3 one is not.
+
+**MTP under PP no longer crashes** - that took the generalised `SupportsPP` fix
+plus dropping `--no-async-scheduling` - but on this model and this hardware it
+delivers nothing. Do not enable it for GLM-4.5-Air on 3090s.
+
+## Kimi-K3 24-expert slice + real DSpark draft, PP=8 on 8x3090
+
+```
+spec off : 172.17, 172.18 ms TPOT
+spec on  : 108.72, 109.71 ms TPOT     1.577x     per prompt 1.54-1.62x
+greedy parity: 7/8 byte-identical
+k=1 control : 214.54, 213.61 ms       slower than baseline
+```
+
+## What the two models together say
+
+The same stack, the same flags, the same day: DSpark on K3 speeds decode up 1.58x
+while MTP on GLM slows it 2.8x. Speculative decoding under pipeline parallelism
+is not one thing that either works or does not - it is a bet on the draft, and
+the draft is what decides. That is worth more to the rig than either number
+alone.
+
+Two open items, unresolved and not smoothed over:
+
+  - one K3 prompt in eight diverges deterministically between spec-on and
+    spec-off; lossless greedy speculation must not do that;
+  - vLLM's `mean acceptance length` reads exactly k+1 on K3 for every k tried
+    and exactly 1.00 on GLM, so on K3 it cannot be trusted as an acceptance rate.
