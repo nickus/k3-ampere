@@ -84,6 +84,31 @@ sessions. REAP-384 buys a further 105 GB of resident KV for 8% more pruning.
    it is a **selection criterion**: take an English/code-calibrated cut, and the
    published retention numbers (which are themselves English coding benchmarks)
    apply directly. Confirm `runrunway`'s calibration corpus before committing.
+
+   **Answered 2026-08-12, and it does not go our way.** The model card states the
+   448 cut "was selected with a calibration corpus that includes Chinese" —
+   **26% of the calibration set**. REAP scores an expert by its mean
+   router-weighted activation over the tokens it actually sees, so a quarter of
+   the selection signal came from data our workload never produces. The author
+   documents the mechanism from the other side: their 99%-English 224-expert cut
+   is "severely broken in Chinese", locking into a single-token loop, precisely
+   because Chinese-specialised experts scored near zero and were pruned first.
+   By our own criterion above, the published English-coding retention numbers
+   therefore do **not** transfer directly to this artifact.
+
+   The card is also blunt about evidence: "**No benchmark has been run on this
+   checkpoint. None.** We have not measured SWE-bench, MMLU, perplexity, or
+   anything else on these weights", and "none of the base model's published
+   benchmark results carry over — assume they do not hold here". It goes further
+   and disputes the method's own claim: "we are not aware of a published result
+   where a MoE survives 50% expert pruning without a healing phase and keeps its
+   scores. Expect degradation." That contradicts the table above, which cites the
+   REAP paper. We are not in a position to referee that disagreement — which is
+   exactly why M0 is not optional.
+
+   The only evidence offered for 448 is a hands-on session with the author's own
+   coding agent, labelled "not a benchmark: no task suite, no scoring, no
+   repetitions, no baseline comparison".
 3. **Boot on our stack, with real weights.** Unverified for this artifact. But
    note our own slice has always run with a *reduced* expert count (8 vs 896)
    through the stock `kimi_k3` code — so a smaller `num_experts` is structurally
