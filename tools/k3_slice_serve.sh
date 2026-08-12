@@ -51,7 +51,7 @@ serve() {  # serve <spec yes|no>
   pkill -9 -f "[a]pi_server" 2>/dev/null; pkill -9 -f "[V]LLM::" 2>/dev/null; sleep 8
   local args=(--model "$MODEL" --served-model-name k3 --trust-remote-code
     --pipeline-parallel-size "$PP" --tensor-parallel-size 1
-    --max-model-len 384 --max-num-seqs 1 --no-enable-prefix-caching
+    --max-model-len 384 --max-num-seqs ${MAXSEQS:-4} --no-enable-prefix-caching
     --gpu-memory-utilization 0.95 --enforce-eager --port $PORT)
   [ "$1" = yes ] && args+=(--speculative-config \
     "{\"method\":\"dspark\",\"model\":\"$DRAFT\",\"num_speculative_tokens\":$K}")
@@ -95,9 +95,16 @@ for SPEC in ${ORDER:-yes no}; do
     continue
   fi
   sample "k3_spec$SPEC" | tee -a "$OUT/k3_samples.txt"
-  /venv/nm/bin/python /workspace/k3/bench_client.py --port $PORT \
-    --tag "k3pp${PP}_spec${SPEC}" --out "$OUT/k3_bench.jsonl" \
-    --model-name k3 --concurrency 1 --max-tokens 256 --reps 2
+  # Sweep concurrency: a speedup measured only at batch 1 is the first thing a
+  # reviewer discards, because at batch 1 under PP most stages are idle and
+  # speculation fills bubbles that real load fills anyway. KV here is tight - the
+  # KDA state costs ~0.48 GiB per sequence regardless of length - so the sweep
+  # stops at 4 rather than 8.
+  for C in ${CONCS:-1 2 4}; do
+    /venv/nm/bin/python /workspace/k3/bench_client.py --port $PORT \
+      --tag "k3pp${PP}_spec${SPEC}" --out "$OUT/k3_bench.jsonl" \
+      --model-name k3 --concurrency "$C" --max-tokens 256 --reps 2
+  done
   A=$(grep -o "Mean acceptance length: [0-9.]*" "$OUT/k3_srv_$SPEC.log" | tail -1 | awk '{print $4}')
   echo "k3 spec=$SPEC: mean acceptance length = ${A:-n/a}"
 done
