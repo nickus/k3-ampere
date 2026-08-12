@@ -539,3 +539,40 @@ supply, is **validation on Ampere / consumer hardware** — every published run 
 B200, H200 or GB10. One published datapoint even suggests our forced backend
 helps: a practitioner reports acceptance *dropping* when moving the draft off
 `TRITON_MLA`, and `TRITON_MLA` is the only MLA decode backend sm_86 has.
+
+## Our patch set covers all three upstream defects — and the parity gate is the wrong instrument
+
+Reading the rest of [#50514](https://github.com/vllm-project/vllm/pull/50514):
+
+| Their defect | Ours |
+|---|---|
+| 1. draft tokens never reach non-last ranks (placeholder `-1` embedded) | measured independently; fixed by the V-series relay |
+| 2. `compute_need_sampled_mask` ends the broadcast early, `last_sampled_tokens` freezes | measured (the ids froze); fixed by V6 |
+| 3. **sampled-token broadcast width mismatch, "fixed by padding the send side"** | **this is our A7**, derived independently before we found the PR |
+
+So the three defects are the same three, found twice, from opposite ends.
+
+Two sentences from that PR change what we should be measuring:
+
+> **Scope: capped at `pipeline_parallel_size <= 2`.** … pp>2 is the first topology
+> with a **middle** stage, which must both adopt upstream taps and contribute its
+> own to the same payload, and **no such run has happened on hardware**.
+
+> this feature does not fail loudly: a drafter fed mis-ordered or missing taps
+> still emits syntactically valid proposals that simply get rejected more often,
+> so **the only symptom is a depressed acceptance rate**. Lifting the cap should
+> require an **acceptance-rate comparison at pp>2**, not just a successful boot.
+
+Consequences for this work:
+
+1. **The greedy-parity gate is the wrong instrument on this stand.** With random
+   dummy draft weights the proposals are noise and acceptance is ~0, so text
+   parity can fail for reasons that have nothing to do with the plumbing. Every
+   "DIFFER" recorded above is consistent with that and is not evidence against
+   the relay. The right criterion, and theirs, is acceptance rate on real weights.
+2. **The gap we can uniquely fill is exactly the one they name**: pp>2 with a real
+   middle stage, on Ampere. We have already booted and served PP=4 with two
+   middle ranks; nobody in any published run has gone past PP=2, and every
+   published run is B200/H200/GB10.
+3. **Statistically meaningful speedup numbers require real weights.** Acceptance
+   rate and tokens/s on a dummy 4-layer slice are meaningless by construction.
