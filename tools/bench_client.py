@@ -53,9 +53,15 @@ PROMPTS = [
 
 def one(port: int, prompt: str, idx: int, max_tokens: int) -> dict:
     """One streamed completion. TTFT is the first chunk carrying text."""
+    # include_usage matters specifically for the case being measured: with
+    # speculative decoding a single SSE chunk can carry several accepted tokens,
+    # so counting chunks undercounts exactly where the speedup is, and would
+    # report a spec-on TPOT inflated by the acceptance length. Take the count
+    # from the server.
     body = json.dumps({
         "model": "m", "prompt": prompt, "max_tokens": max_tokens,
         "temperature": 0, "stream": True,
+        "stream_options": {"include_usage": True},
     }).encode()
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/v1/completions", body,
@@ -64,6 +70,7 @@ def one(port: int, prompt: str, idx: int, max_tokens: int) -> dict:
     ttft = None
     text = []
     n_chunks = 0
+    usage = None
     with urllib.request.urlopen(req, timeout=600) as r:
         for raw in r:
             line = raw.decode().strip()
@@ -76,7 +83,10 @@ def one(port: int, prompt: str, idx: int, max_tokens: int) -> dict:
                 d = json.loads(payload)
             except json.JSONDecodeError:
                 continue
-            piece = d.get("choices", [{}])[0].get("text", "")
+            if d.get("usage"):
+                usage = d["usage"]
+            choices = d.get("choices") or [{}]
+            piece = choices[0].get("text", "")
             if piece:
                 if ttft is None:
                     ttft = time.perf_counter() - t0
@@ -84,9 +94,7 @@ def one(port: int, prompt: str, idx: int, max_tokens: int) -> dict:
                 n_chunks += 1
     wall = time.perf_counter() - t0
     joined = "".join(text)
-    # Chunk count is the token count for a streaming completion; the server does
-    # not return usage on a stream.
-    n = n_chunks
+    n = (usage or {}).get("completion_tokens") or n_chunks
     decode_s = wall - (ttft or wall)
     return {
         "prompt_idx": idx,
@@ -94,6 +102,7 @@ def one(port: int, prompt: str, idx: int, max_tokens: int) -> dict:
         "wall_s": wall,
         "decode_s": decode_s,
         "out_tokens": n,
+        "n_chunks": n_chunks,
         # Per-token decode cost. n-1 because the first token is TTFT, not decode.
         "tpot_ms": (decode_s / (n - 1) * 1000) if n > 1 else None,
         "text_sha": hashlib.sha256(joined.encode()).hexdigest()[:16],
@@ -151,9 +160,13 @@ def main() -> int:
         }
         with open(args.out, "a") as f:
             f.write(json.dumps(rec) + "\n")
+        # A dead engine returns zero-token responses; say so and keep going
+        # rather than dying on the format string and losing the later configs.
+        med = rec["median_tpot_ms"]
         print(f"{args.tag} c={args.concurrency} rep{rep}: "
-              f"median TPOT {rec['median_tpot_ms']:.2f} ms "
-              f"({len(tpots)}/{len(rows)} requests)", flush=True)
+              + (f"median TPOT {med:.2f} ms" if med is not None
+                 else "NO USABLE REQUESTS (all returned <2 tokens)")
+              + f" ({len(tpots)}/{len(rows)} requests)", flush=True)
     return 0
 
 
