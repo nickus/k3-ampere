@@ -208,3 +208,11 @@ substitute costs three lines in `sitecustomize.py`:
 `faulthandler.register(signal.SIGUSR1, all_threads=True)`, then `kill -USR1` the
 worker and read its own stderr. No privileges are involved because the process
 dumps itself, and it works anywhere Python runs.
+
+**30. Advertised `inet_down` is a speedtest number, not throughput to your registries.**
+A rented host advertising 1412 Mbit/s delivered **901 B/s** from
+`wheels.vllm.ai` and **0 B/s** from PyPI. pip appeared to be working — the
+process was alive and the cache grew — so it took 20 minutes of watching a
+counter to notice that 320 MB in 20 minutes meant four more hours. One 20-second
+`curl -w '%{speed_download}'` against the index you will actually pull from
+answers it before you commit. `bootstrap_box.sh` now aborts below 50 kB/s.
