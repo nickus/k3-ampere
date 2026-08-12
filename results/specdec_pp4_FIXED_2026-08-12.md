@@ -919,3 +919,46 @@ The invariant "a spec step carries its anchor token" holds without exception at
 PP=1 and is violated under pipeline parallelism. That is the control that makes
 this an upstream report rather than a suspicion, and it doubles as the regression
 test: 24 clean steps at PP=1, and the same must hold at PP=2 once fixed.
+
+## Fix #1: keep the anchor. Crash gone, correctness not.
+
+`num_scheduled_spec_tokens = min(num_scheduled_spec_tokens, num_new_tokens - 1)`
+in the scheduler - refuse to emit a step made only of drafts, schedule one draft
+fewer instead. Inert when the step is well formed (`min(k, k) == k`).
+
+PP=2 on the stand, after:
+
+```
+12 steps  qlen=[3]  num_logits=[3]  ndraft=2
+ 1 step   qlen=[4]  num_logits=[4]  ndraft=3
+ negative-index steps: 0
+ device-side asserts:  0
+```
+
+Every step now agrees with itself. The malformed step is gone, at the cost of one
+fewer draft on steps where the rollback is still in flight.
+
+**But greedy parity still fails**, which is the test that matters:
+
+```
+PP=1: 'Spectrum决赛中有那么多决赛中有那么多…'
+PP=2: 'Spectrum!决赛中做什么有那么多!决赛中做什么有那么多…'
+```
+
+Under greedy, speculative decoding must be lossless regardless of how many drafts
+a step carries, so a divergence is a defect and not a consequence of scheduling 2
+drafts instead of 3.
+
+Note what the `!` is: token id 0, again. The traces show `rejected=[3]` - the
+drafts ARE being rejected - so the zero is not an accepted draft. It is the
+anchor itself: `last_sampled_tokens` also travels the deferred relay, and a step
+that reads it before it lands embeds token 0.
+
+So there are two defects, not one:
+
+  1. the step could be scheduled without an anchor slot  - fixed here, verified
+  2. the anchor's VALUE can still be unavailable when the step runs - open
+
+The second is the same class as the original draft-token defect and is why the
+PP=2 dummy-stand proof looked clean earlier: at 4 layers there are too few steps
+in flight for the value to be missing.
