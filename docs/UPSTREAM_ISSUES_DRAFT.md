@@ -125,3 +125,46 @@ when async scheduling is off. Reproduced with `mtp` on GLM-4.5-Air and with
 `speculative_config` + `pipeline_parallel_size > 1` + `--no-async-scheduling` at
 config time with a message that says why. Silently producing `!` is the worst of
 the three options.
+
+---
+
+## Verified on a pristine tree
+
+Both issues above were re-checked in a separate venv holding an unpatched
+`vllm==0.26.1rc1.dev693+g7f7a32cfe` (the latest nightly at the time), serving
+stock GLM-4.5-Air AWQ with its own MTP head. Nothing of ours is in that venv
+except where noted.
+
+MTP under pipeline parallelism turns out to fail in **three** places in a row,
+each hiding the next:
+
+1. **Config time.** `SupportsPP` demanded of the draft model — issue 1 above.
+   Nothing loads. Fixed by the one-line verification relaxation.
+2. **Warmup.** With only that line applied, the last rank dies inside
+   `compile_or_warm_up_model`:
+   ```
+   vllm/v1/worker/gpu/warmup.py:410  warmup_kernels
+   vllm/v1/worker/gpu/warmup.py:379  _run_decode_step
+   vllm/v1/worker/gpu_worker.py:1073 execute_model
+       get_pp_group().irecv_tensor_dict(...)
+   vllm/distributed/parallel_state.py:1148 irecv_tensor_dict
+   ```
+   The other ranks then report `Connection closed by peer`, which is the
+   downstream symptom, not the cause. This is a send/receive width mismatch on
+   the sampled-token broadcast: the sender ships `sampled_token_ids` narrower
+   than the width receivers allocate when speculation is on.
+3. **Runtime.** With warmup fixed, output is wrong unless async scheduling is on
+   — issue 2 above.
+
+The controls, same tree, same day:
+
+```
+spec off, async on  vs  spec off, async off : IDENTICAL   (scheduler mode alone
+                                                           changes nothing)
+Qwen3-0.6B, PP=1 vs PP=2, no speculation    : IDENTICAL   (the pipeline path
+                                                           itself is greedy-stable)
+```
+
+So neither finding is "PP is broken" and neither is "our patches did it". Both
+are specific to speculative decoding under pipeline parallelism, and both
+reproduce on stock code with a stock model.
