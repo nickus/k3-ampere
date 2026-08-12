@@ -17,7 +17,7 @@
 set -u
 cd /workspace/k3
 MODEL=${MODEL:-/workspace/models/k3-slice}
-DRAFT=${DRAFT:-/workspace/models/k3-dspark}
+DRAFT=${DRAFT:-/workspace/models/k3-dspark-rh}
 PORT=18400
 PP=${PP:-8}
 K=${K:-3}
@@ -26,13 +26,23 @@ mkdir -p "$OUT"
 
 export VLLM_USE_V2_MODEL_RUNNER=1 VLLM_NO_USAGE_STATS=1 DO_NOT_TRACK=1
 export VLLM_USE_FLASHINFER_SAMPLER=0
+# The draft lives on the LAST pipeline stage and at an even 93/8 split that
+# stage has no room for it - measured OOM creating draft weights twice.
+# Budget per stage, from the measured 141.3 GB over 93 layers (1.52 GB/layer):
+#   stage 0    : L*1.52 + 2.35 (embedding)
+#   stages 1-6 : L*1.52
+#   stage 7    : L*1.52 + 2.35 (lm_head) + 4.73 (draft)
+# Holding every stage under ~20 GB of the 23.56 GB card, so ~3.5 GB is left for
+# KV, gives 8 layers on the last stage and 11 on the first. A first attempt at 9
+# on the last stage came within ~600 MB and still OOMed.
+export VLLM_PP_LAYER_PARTITION=${VLLM_PP_LAYER_PARTITION:-11,12,12,12,12,13,13,8}
 
 serve() {  # serve <spec yes|no>
   pkill -9 -f "[a]pi_server" 2>/dev/null; pkill -9 -f "[V]LLM::" 2>/dev/null; sleep 8
   local args=(--model "$MODEL" --served-model-name k3 --trust-remote-code
     --pipeline-parallel-size "$PP" --tensor-parallel-size 1
-    --max-model-len 4096 --no-async-scheduling --max-num-seqs 8
-    --gpu-memory-utilization 0.92 --enforce-eager --port $PORT)
+    --max-model-len 2048 --no-async-scheduling --max-num-seqs 4
+    --gpu-memory-utilization 0.97 --enforce-eager --port $PORT)
   [ "$1" = yes ] && args+=(--speculative-config \
     "{\"method\":\"dspark\",\"model\":\"$DRAFT\",\"num_speculative_tokens\":$K}")
   nohup /venv/nm/bin/python -m vllm.entrypoints.openai.api_server "${args[@]}" \
@@ -65,7 +75,9 @@ for p in ["Write a Python function that merges two sorted lists.",
 PY
 }
 
-for SPEC in no yes; do
+# spec FIRST: it is the phase that can fail, and a 12-minute load of
+# 141 GB is too expensive to spend on the baseline before knowing.
+for SPEC in ${ORDER:-yes no}; do
   echo "=== k3-slice spec=$SPEC pp=$PP"
   if ! serve "$SPEC"; then
     echo "k3_spec$SPEC: NEVER_SERVED"
@@ -75,7 +87,7 @@ for SPEC in no yes; do
   sample "k3_spec$SPEC" | tee -a "$OUT/k3_samples.txt"
   /venv/nm/bin/python /workspace/k3/bench_client.py --port $PORT \
     --tag "k3pp${PP}_spec${SPEC}" --out "$OUT/k3_bench.jsonl" \
-    --concurrency 1 --max-tokens 256 --reps 2
+    --model-name k3 --concurrency 1 --max-tokens 256 --reps 2
   A=$(grep -o "Mean acceptance length: [0-9.]*" "$OUT/k3_srv_$SPEC.log" | tail -1 | awk '{print $4}')
   echo "k3 spec=$SPEC: mean acceptance length = ${A:-n/a}"
 done

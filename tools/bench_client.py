@@ -51,7 +51,8 @@ PROMPTS = [
 ]
 
 
-def one(port: int, prompt: str, idx: int, max_tokens: int) -> dict:
+def one(port: int, prompt: str, idx: int, max_tokens: int,
+        model: str = "m") -> dict:
     """One streamed completion. TTFT is the first chunk carrying text."""
     # include_usage matters specifically for the case being measured: with
     # speculative decoding a single SSE chunk can carry several accepted tokens,
@@ -59,7 +60,7 @@ def one(port: int, prompt: str, idx: int, max_tokens: int) -> dict:
     # report a spec-on TPOT inflated by the acceptance length. Take the count
     # from the server.
     body = json.dumps({
-        "model": "m", "prompt": prompt, "max_tokens": max_tokens,
+        "model": model, "prompt": prompt, "max_tokens": max_tokens,
         "temperature": 0, "stream": True,
         "stream_options": {"include_usage": True},
     }).encode()
@@ -110,10 +111,11 @@ def one(port: int, prompt: str, idx: int, max_tokens: int) -> dict:
     }
 
 
-def run_pass(port: int, conc: int, max_tokens: int) -> list[dict]:
+def run_pass(port: int, conc: int, max_tokens: int,
+             model: str = "m") -> list[dict]:
     """Issue every prompt with `conc` in flight at once."""
     if conc == 1:
-        return [one(port, p, i, max_tokens) for i, p in enumerate(PROMPTS)]
+        return [one(port, p, i, max_tokens, model) for i, p in enumerate(PROMPTS)]
     work: queue.Queue = queue.Queue()
     for i, p in enumerate(PROMPTS):
         work.put((i, p))
@@ -126,7 +128,7 @@ def run_pass(port: int, conc: int, max_tokens: int) -> list[dict]:
                 i, p = work.get_nowait()
             except queue.Empty:
                 return
-            r = one(port, p, i, max_tokens)
+            r = one(port, p, i, max_tokens, model)
             with lock:
                 out.append(r)
 
@@ -146,11 +148,16 @@ def main() -> int:
     ap.add_argument("--concurrency", type=int, default=1)
     ap.add_argument("--max-tokens", type=int, default=512)
     ap.add_argument("--reps", type=int, default=3)
+    # Hardcoding this cost a whole K3 baseline pass: the served name was "k3"
+    # and every request came back an HTTP error against "m".
+    ap.add_argument("--model-name", default="m")
     args = ap.parse_args()
 
-    run_pass(args.port, args.concurrency, min(64, args.max_tokens))  # warm
+    run_pass(args.port, args.concurrency, min(64, args.max_tokens),
+             args.model_name)  # warm
     for rep in range(1, args.reps + 1):
-        rows = run_pass(args.port, args.concurrency, args.max_tokens)
+        rows = run_pass(args.port, args.concurrency, args.max_tokens,
+                        args.model_name)
         tpots = [r["tpot_ms"] for r in rows if r["tpot_ms"]]
         rec = {
             "tag": args.tag, "rep": rep, "concurrency": args.concurrency,
