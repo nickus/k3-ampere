@@ -458,3 +458,40 @@ above stand, and option 1 ("stall the pipeline") specifically means an explicit
 sequencing change, not a broadcast dropped into the existing step.
 
 Both A8 and A9 are dead ends and are recorded as such. Neither is kept.
+
+## This is a known, open upstream problem — not our bug
+
+Searching the vLLM tracker (not deriving) turns up an active cluster of work on
+exactly this combination:
+
+| Issue/PR | What it is |
+|---|---|
+| [#44697](https://github.com/vllm-project/vllm/issues/44697) | **RFC**: MTP speculative decoding under pipeline parallelism (PP>1) |
+| [#49355](https://github.com/vllm-project/vllm/issues/49355) | **Bug**: MTP spec decode broken with PP>1 — *three distinct failures* |
+| [#44698](https://github.com/vllm-project/vllm/pull/44698), [#46994](https://github.com/vllm-project/vllm/pull/46994) | PRs adding MTP + PP support |
+| [#45985](https://github.com/vllm-project/vllm/issues/45985) | Eagle3 speculative decoding with PP |
+| [#49442](https://github.com/vllm-project/vllm/pull/49442) | Fix drafter access on non-final PP ranks (a crash, not our correctness bug) |
+| [#50514](https://github.com/vllm-project/vllm/pull/50514) | Feat/spec decode under pipeline parallel |
+| [#42109](https://github.com/vllm-project/vllm/issues/42109) | RFC: disaggregated spec decode with a standalone draft model |
+
+**#49355 is our bug, reported independently on completely different hardware** —
+3 nodes × 4×H100, Nemotron-3-Ultra 550B NVFP4, TP=4 PP=3, Ray. Their "Failure 3"
+quotes the same two things this investigation measured:
+
+```
+scheduled_spec_decode_tokens={<req>: [-1, -1, -1, -1, -1]}
+...
+  File "vllm/v1/worker/gpu_model_runner.py", line 4399, in execute_model
+    sample_hidden_states = hidden_states[logits_indices]
+```
+
+Same `-1` dict, same line. Theirs is the V1 runner, ours the V2 — the same shape
+in both. They also note the model's own official launch recipe uses MTP at
+`TP=8, PP=1`, so the vendor never exercised this path either.
+
+**One practical knob from that report, tested here.** Their Failure 2: vLLM
+*auto-enables* async scheduling for MTP-class methods with no `PP > 1` check, and
+it breaks the PP broadcast; workaround `--no-async-scheduling`. Tested on our
+setup: it changes behaviour — the A9 broadcast that previously deadlocked now
+completes — but greedy parity is still broken at k=1,2,3. So it is a necessary
+setting for anyone doing this, and not sufficient here.
