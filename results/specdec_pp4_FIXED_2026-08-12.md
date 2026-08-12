@@ -342,3 +342,40 @@ So the remaining question is one hop further back: what the last rank actually
 returns to the engine as `DraftTokenIds`, and why the engine's next
 `scheduled_spec_decode_tokens` is all `-1`. A8 stays in the patch set because it
 is necessary but demonstrably not sufficient.
+
+### Why A8 cannot work: the scheduler dict itself is empty of values
+
+Measured on the non-last rank:
+
+```
+[DICT] last=False spec_tokens=[('cmpl-92abed90471fc5fe-0-ba20653e', [-1, -1, -1])]
+```
+
+`scheduler_output.scheduled_spec_decode_tokens` carries **`-1`**, the no-token
+filler — while the last rank's own `req_states.draft_tokens` holds real ids
+(its input ids were `[86072, 86072, 86072, 86072]`, not `-1`).
+
+So there are **two** independent breaks, not one:
+
+1. the device buffer `req_states.draft_tokens` has no producer on non-last ranks
+   (A8 addresses this, and is necessary);
+2. the engine publishes `[-1, -1, -1]` as the next step's draft tokens, so there
+   is nothing for A8 to copy. The last rank verifies drafts the scheduler does
+   not know about — it allocated k slots but filled them with the filler.
+
+A8 is therefore correct and useless on its own, and is recorded as such. The next
+question is narrow: what `DraftTokensHandler.get_draft_tokens()` returns, and
+from which rank's `ModelRunnerOutput` the engine takes `draft_token_ids` under
+pipeline parallelism.
+
+A parallel code-reading pass (7 agents) reached the same mechanism for break 1
+independently, and added two things this investigation did not have:
+
+- row 0 survives because it is fed from `last_sampled_tokens`, which *is*
+  maintained on non-last ranks via `update_pp_decode_requests()`, called before
+  `prepare_inputs`;
+- this is a V2-runner regression: the V1 runner spliced draft ids from
+  `scheduled_spec_decode_tokens` on the CPU side, which is rank-symmetric; V2
+  replaced that with a device-buffer read to avoid an H2D copy, and the buffer
+  has no PP producer. Upstream's `ValueError` for `dspark` + PP
+  (`model_runner.py:225-232`) is the acknowledgement that this path is unwired.
