@@ -174,10 +174,33 @@ PP=4  shape=(11, 4096) sum=6.4611821672e-09 weighted=2.2653207910e-05 absmax=7.7
   3. drafts are therefore verified against garbage and acceptance is random;
   4. on a step where a draft is accepted, that wrong token enters the output.
 
-  Still open: the exact line that sizes the transfer (upstream's
-  hidden_states/residual path — our B1/B2/B4 only add aux tap entries to the
-  dict, they do not resize hidden_states), and whether it fires on EOS-terminated
-  generation as well as token-limit truncation.
+  **Correction: the transfer is not short.** Probing the copy that fills the
+  receive buffer shows the full width arriving:
+
+  ```
+  [NCOPY] n=4 num_tokens=4 recv_shape=(4, 1024) buf_shape=(2048, 1024)
+  ```
+
+  Four rows are received and four are copied, yet the fingerprint taken
+  immediately after that copy already shows rows 1..k as a constant. So the
+  corruption is present in **what the first rank sent**, i.e. in its own forward
+  — not in the hand-off and not in the receiving rank.
+
+  In this slice the first rank holds the **KDA linear-attention layers**, which
+  carry recurrent state per sequence. Under pipeline parallelism that rank
+  advances its state on a different schedule than at PP=1, which is the standing
+  KDA-resume risk from the offload work. That makes the working hypothesis:
+  **the KDA recurrent state is advanced wrongly for the speculative positions**,
+  so rows 1..k of the stage output are stale while row 0 is right.
+
+  Next measurement, and it is a direct one: fingerprint the output of the
+  boundary layer at PP=1 and at PP=2 for the same prompt. If PP=1 gives four
+  varying rows there and PP=2 gives one varying plus a constant, the defect is
+  confirmed inside the first stage's layers rather than anywhere in the PP
+  plumbing.
+
+  Also still open: whether any of this fires on EOS-terminated generation rather
+  than token-limit truncation.
 
 - ~~Greedy text parity is BROKEN at every PP>=2~~ (superseded by the rows above) Four comparisons, same prompt, `temperature=0`:
 
