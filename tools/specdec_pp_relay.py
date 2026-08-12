@@ -196,6 +196,57 @@ def main() -> int:
         "R8 send drafts after propose",
     )
 
+    # ---- R9: stop the relay ending a few steps early.
+    #
+    # Measured after R1-R8: the ids agree on the first decode steps and then the
+    # non-last rank's `last_sampled_tokens` FREEZES while the last rank moves on.
+    # That is the second defect described on vllm#50514: the scheduler advances
+    # `num_computed_tokens` by the full scheduled width up front and rolls the
+    # rejected part back only in `update_from_output`, which under PP lands after
+    # the next batch is scheduled. `compute_need_sampled_mask` reads the inflated
+    # count, decides the request is finishing up to `num_speculative_tokens`
+    # early, returns None - and both the send and the recv are skipped from then
+    # on.
+    #
+    # Widening the finish test by the speculative depth can only DELAY calling a
+    # request finished, never advance it, so it cannot cause a missing broadcast.
+    # At worst one extra relay for a request that really has finished, whose slot
+    # the existing `freed` / `need_sampled_mask` filtering in
+    # `get_prev_sampled_outputs` already discards. Both sides call the same
+    # function with the same argument, so the decision stays symmetric.
+    ok &= patch(
+        pp,
+        """def compute_need_sampled_mask(input_batch: InputBatch) -> np.ndarray | None:""",
+        """def compute_need_sampled_mask(
+    input_batch: InputBatch, spec_slack: int = 0
+) -> np.ndarray | None:""",
+        "R9a widen the finish test",
+    )
+    ok &= patch(
+        pp,
+        """    not_finishing = np.maximum(old_computed, prefill_len) + 1 < max_seq_len""",
+        """    not_finishing = (
+        np.maximum(old_computed, prefill_len) + 1 < max_seq_len + spec_slack
+    )""",
+        "R9b apply the slack",
+    )
+    ok &= patch(
+        pp,
+        """        need_sampled_mask = compute_need_sampled_mask(input_batch)
+        if need_sampled_mask is None:""",
+        """        need_sampled_mask = compute_need_sampled_mask(
+            input_batch, self.num_speculative_steps
+        )
+        if need_sampled_mask is None:""",
+        "R9c receiver passes the slack",
+    )
+    ok &= patch(
+        pp,
+        """        if compute_need_sampled_mask(input_batch) is None:""",
+        """        if compute_need_sampled_mask(input_batch, self.num_speculative_steps) is None:""",
+        "R9d sender passes the slack",
+    )
+
     print("SPECDEC_PP_RELAY_DONE" if ok else "SPECDEC_PP_RELAY_INCOMPLETE")
     return 0 if ok else 1
 
