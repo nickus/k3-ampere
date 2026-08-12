@@ -1189,3 +1189,31 @@ Two open items, unresolved and not smoothed over:
     spec-off; lossless greedy speculation must not do that;
   - vLLM's `mean acceptance length` reads exactly k+1 on K3 for every k tried
     and exactly 1.00 on GLM, so on K3 it cannot be trusted as an acceptance rate.
+
+## The 1-in-8 divergence is the model, not the mechanism
+
+Control: same server, speculation OFF, only concurrency varied (1 vs 4), which
+changes batch shape and nothing else.
+
+```
+prompts whose text changed with batch shape alone: 1/8  -> prompt 5
+  prompt 5, conc 1: ' The\n- 1. The\n- 1. The\n- 1. The...'
+  prompt 5, conc 4: ' The first of the first of the first...'
+```
+
+Prompt 5 is the same prompt that differed between spec-on and spec-off. It is
+tie-sensitive: on a 24-of-448 expert slice the top two logits for that
+continuation are close enough that a change in batch shape flips the argmax.
+Speculation changes batch shape by construction - it verifies k+1 positions at
+once - so it flips it too, and it would flip it with the mechanism working
+perfectly.
+
+**So greedy parity holds wherever the model itself is stable: 7/8 prompts are
+byte-identical, and the 8th is not evidence about speculative decoding.** The
+open item from the previous section is closed, and closed by measurement rather
+than by argument.
+
+This is also a caution for the slice as an instrument: it is sound for mechanism
+and timing, and it must not be used for any test whose verdict depends on exact
+token equality, because one prompt in eight will not survive a batch-shape
+change on its own.
