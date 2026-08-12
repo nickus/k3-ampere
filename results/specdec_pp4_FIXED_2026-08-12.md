@@ -379,3 +379,58 @@ independently, and added two things this investigation did not have:
   replaced that with a device-buffer read to avoid an H2D copy, and the buffer
   has no PP producer. Upstream's `ValueError` for `dspark` + PP
   (`model_runner.py:225-232`) is the acknowledgement that this path is unwired.
+
+### The `-1` is by design, and that changes the verdict
+
+`DraftTokensHandler` (`vllm/v1/worker/gpu/spec_decode/utils.py:22-52`):
+
+```python
+    def set_draft_tokens(self, input_batch, draft_tokens) -> None:
+        self.req_ids = input_batch.req_ids
+        self.num_draft_tokens = draft_tokens.shape[1]
+        if not input_batch.has_structured_output_reqs:
+            # No draft token validation needs to be performed by
+            # the scheduler for this batch.
+            self.draft_tokens_np = None
+            return
+        ...
+    def get_draft_tokens(self) -> DraftTokenIds | None:
+        if self.draft_tokens_np is not None:
+            ...
+        else:
+            draft_token_ids = [[-1] * self.num_draft_tokens for _ in self.req_ids]
+```
+
+Draft **values** are shipped to the scheduler only when structured outputs need
+grammar validation. Otherwise the handler deliberately returns `-1` placeholders,
+and the scheduler pads `scheduled_spec_decode_tokens` with `[-1] * k`
+(`core/sched/scheduler.py:1071`). The scheduler only ever needed the *count*; the
+values stay on the GPU and are consumed there. The engine reads them from the
+last PP stage (`multiproc_executor.py:_get_output_rank` — "first TP worker of the
+last PP stage"), so the rank is right; there is simply nothing to read.
+
+**So A8 is wrong at the root**, not merely insufficient: the scheduler dict is
+not a source of draft values by design. It stays in the tree only as a marker of
+a dead end and should be removed rather than fixed.
+
+**And the real obstacle is a data dependency, not a missing wire.** The drafts
+for step T+1 are produced at the END of step T, on the last rank. The first rank
+needs them at the START of T+1, to embed them as input tokens. Under pipelining
+the first rank is already working on T+1 while the last rank is still on T, so
+the value has to travel *backwards* in the pipeline against the direction of
+flow. That is very likely what upstream's blanket `ValueError` for `dspark` + PP
+(`gpu/model_runner.py:225-232`) is protecting.
+
+Options, none of them a one-line patch, and none yet measured:
+
+1. **Stall the pipeline** for the draft hand-off: correct, and it gives back part
+   of the speedup speculation was meant to buy.
+2. **Host the drafter on the first rank.** It is where the tokens are needed, but
+   the draft consumes the target's final hidden states and lm_head, which live on
+   the last rank — that is why upstream hosts it there.
+3. **Carry the drafts to the first rank one step late** and verify with a lag.
+   Changes semantics; needs proof it still matches greedy output.
+4. **Give up speculation under PP** and take the throughput from elsewhere.
+
+This is the first finding in this campaign that is a design question rather than
+a defect, so it is recorded as one rather than patched over.
