@@ -17,18 +17,24 @@ apt-get update -qq >/dev/null 2>&1 || true
 apt-get install -y -qq python3-venv python3-pip git curl >/dev/null 2>&1 || true
 
 echo "=== [1b/6] measure REAL egress before committing 20 minutes to a download"
-# vast.ai's advertised inet_down is a speedtest figure and says nothing about
-# throughput to the registries we actually use. One rented host advertised
-# 1412 Mbit/s and delivered 901 B/s from wheels.vllm.ai and 0 B/s from PyPI -
-# pip crawled for 20 minutes before that became obvious. 20 seconds here.
-SPEED=$(curl -s -o /dev/null -w '%{speed_download}' --max-time 20 \
-  https://wheels.vllm.ai/nightly/cu130/vllm/ || echo 0)
-SPEED=${SPEED%%.*}
-echo "egress to wheels.vllm.ai: ${SPEED} B/s"
-if [ "${SPEED:-0}" -lt 50000 ]; then
-  echo "ABORT: this host cannot reach the wheel index at a usable speed."
-  echo "Destroy it and rent another - do not wait this out."
-  exit 2
+# Measure with a RANGED FETCH OF THE ACTUAL WHEEL, not the index page. The index
+# is 591 bytes, so curl's speed_download there reports latency plus the TLS
+# handshake and reads as ~900 B/s on a host that in fact sustains 11 MB/s. That
+# bogus number nearly made me destroy a perfectly good machine.
+_IDX=$(curl -s --max-time 30 https://wheels.vllm.ai/nightly/cu130/vllm/ |
+       grep -oE 'href="[^"]+x86_64\.whl"' | tail -1 | sed 's/href="//; s/"//')
+if [ -n "$_IDX" ]; then
+  _URL=$(python3 -c "import urllib.parse;print(urllib.parse.urljoin('https://wheels.vllm.ai/nightly/cu130/vllm/','$_IDX'))")
+  SPEED=$(curl -s -o /dev/null -w '%{speed_download}' --max-time 60 -r 0-40000000 "$_URL" || echo 0)
+  SPEED=${SPEED%%.*}
+  echo "egress (40 MB of the real wheel): ${SPEED} B/s"
+  if [ "${SPEED:-0}" -lt 300000 ]; then
+    echo "ABORT: under 300 kB/s means hours for the ~4.5 GB install."
+    echo "Destroy this host and rent another - do not wait it out."
+    exit 2
+  fi
+else
+  echo "WARNING: could not resolve a wheel URL to measure; continuing"
 fi
 
 echo "=== [2/6] venv + vLLM nightly (cu130)"

@@ -209,7 +209,14 @@ substitute costs three lines in `sitecustomize.py`:
 worker and read its own stderr. No privileges are involved because the process
 dumps itself, and it works anywhere Python runs.
 
-**30. Advertised `inet_down` is a speedtest number, not throughput to your registries.**
+**30. Measure bandwidth with a big file, or you are measuring latency.**
+Advertised `inet_down` says nothing about throughput to the registries you pull
+from — but the first check I wrote to replace it was worse than useless: it timed
+a **591-byte index page**, where `speed_download` is dominated by the TLS
+handshake. It reported ~900 B/s on a host that then sustained **11 MB/s** on a
+ranged fetch of the real wheel, and I nearly destroyed a working machine on that
+number. Measure with tens of megabytes of the artifact you will actually
+download. (A 404 also reports 0 B/s very convincingly — check `size_download`.)
 A rented host advertising 1412 Mbit/s delivered **901 B/s** from
 `wheels.vllm.ai` and **0 B/s** from PyPI. pip appeared to be working — the
 process was alive and the cache grew — so it took 20 minutes of watching a
