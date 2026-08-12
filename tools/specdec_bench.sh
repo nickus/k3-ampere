@@ -10,8 +10,10 @@
 # What it measures, per configuration, with repeats:
 #   - mean acceptance length (the mechanism-level number vllm#50514 asks for)
 #   - output tokens/s and TPOT (the number we owe)
-# Configurations: PP=1 / 2 / 4, spec off and on. PP>2 is the case upstream caps
-# itself at and calls unvalidated on hardware.
+# Configurations: PP=4 and PP=8, spec off and on. PP=1 is impossible here - the
+# 60 GB model does not fit one 24 GB card, which is the whole reason this rig is
+# pipeline-parallel. Both degrees are > 2, i.e. exactly the region vllm#50514
+# caps itself at and calls unvalidated on hardware.
 set -u
 cd /workspace/k3
 MODEL=${MODEL:-/workspace/models/glm45air}
@@ -84,7 +86,7 @@ acceptance() {  # acceptance <logfile> -> last reported mean acceptance length
   grep -o "Mean acceptance length: [0-9.]*" "$1" | tail -1 | awk '{print $4}'
 }
 
-for PP in 1 2 4; do
+for PP in 4 8; do
   for SPEC in no yes; do
     K=3; [ "$SPEC" = no ] && K=0
     TAG="pp${PP}_spec${SPEC}"
