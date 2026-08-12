@@ -129,8 +129,32 @@ PP=4  shape=(11, 4096) sum=6.4611821672e-09 weighted=2.2653207910e-05 absmax=7.7
   an f-string, so every line printed as the same literal template and diffed
   clean. The "zero rejections" reading came from the same broken output.
 
+  **Confirmed one level deeper: only the first row of hidden_states crosses the
+  pipeline.** Fingerprinting the rows the last rank selects:
+
+  ```
+  PP=1  hs=(4,1024) idx=[0,1,2,3] rows=[0.014293,  0.014293,  0.014293,  0.014293]
+  PP=2  hs=(4,1024) idx=[0,1,2,3] rows=[0.014293, -0.020827, -0.020827, -0.020827]
+  ```
+
+  Row 0 matches the PP=1 reference exactly. Rows 1..k carry a constant,
+  `-0.020827`, which is the same value the probe printed during the profiling
+  pass — i.e. they are **stale receive-buffer contents that the transfer never
+  overwrote**. The buffer is the right shape; only one row of it arrives.
+
+  The whole chain then follows: the target's logits for the speculative
+  positions are computed from stale rows, so verification of drafts is
+  meaningless and acceptance is effectively random; on the rare step where a
+  draft is accepted, a token derived from that garbage enters the output. That is
+  the "tail" divergence, and it is why plain PP is clean — without speculation a
+  request has one query row and there is nothing to go stale.
+
+  Same class of defect as A7, one transfer over: a count mismatch in the
+  pipeline hand-off, silent because the buffer is large enough.
+
   Still open: whether it also fires when the model stops on EOS rather than the
-  token limit.
+  token limit; and whether the short send is ours (B1/B2/B4 touch
+  IntermediateTensors) or upstream's hidden_states/residual path.
 
 - ~~Greedy text parity is BROKEN at every PP>=2~~ (superseded by the rows above) Four comparisons, same prompt, `temperature=0`:
 
