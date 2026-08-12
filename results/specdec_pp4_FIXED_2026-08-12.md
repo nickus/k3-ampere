@@ -96,6 +96,11 @@ PP=4  shape=(11, 4096) sum=6.4611821672e-09 weighted=2.2653207910e-05 absmax=7.7
   verification uses them correctly. Greedy parity was never checked there; the
   gate that would have caught it compared strings contaminated by a probe banner.
 
+  A7 is **not** the cause: padding with `-1` and padding with `0` produce
+  byte-identical output, so the receivers do respect `num_sampled` and never
+  read the filler. The parity defect predates A7 — the hang was simply masking
+  it.
+
 - ~~Greedy text parity PP=1 vs PP=4 is not established.~~ The two outputs agree
   for most of the sequence and diverge in the tail. With random dummy draft
   weights and a degenerate repetitive completion, a chance draft acceptance
