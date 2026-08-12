@@ -402,6 +402,51 @@ def main(sp: str) -> None:
         "A2 embedding on the draft rank (no collective)",
     )
 
+    # ---- A7: the sampled-token broadcast sends a narrower tensor than the
+    # receivers allocate, and NCCL blocks forever.
+    #
+    # Measured at the fault site, PP=2, num_speculative_tokens=1:
+    #   Worker_PP0  RECV expects=(1, 2)          max_sample_len=2
+    #   Worker_PP1  SEND sampled_token_ids=(1,1) max_sample_len=2
+    #
+    # `PPHandler.receive` always allocates [num_reqs, max_sample_len] where
+    # max_sample_len = num_speculative_tokens + 1. The last rank broadcasts
+    # whatever the sampler produced — and on any step with no draft tokens,
+    # starting with the prefill step, that is one token per request. A
+    # broadcast whose element counts disagree does not error, it hangs: three
+    # ranks wait in `receive` while the last rank has already moved on to the
+    # next microbatch's `execute_model`.
+    #
+    # This is what made PP>=2 + speculation look like a pipeline-ordering bug.
+    # It is neither ordering nor PP degree: PP=4 *without* speculation serves
+    # fine, and the deadlock reproduces at PP=2.
+    #
+    # -1 is the existing "no token" filler, and the receivers already learn the
+    # valid count from the `num_sampled` tensor broadcast right after this one,
+    # so padding changes no semantics.
+    patch(
+        f"{sp}/vllm/v1/worker/gpu/pp_utils.py",
+        """        assert sampled_token_ids.dtype == torch.int64
+
+        if current_platform.is_xpu():""",
+        """        assert sampled_token_ids.dtype == torch.int64
+
+        if sampled_token_ids.shape[1] < self.max_sample_len:
+            _pad = torch.full(
+                (
+                    sampled_token_ids.shape[0],
+                    self.max_sample_len - sampled_token_ids.shape[1],
+                ),
+                -1,
+                dtype=sampled_token_ids.dtype,
+                device=sampled_token_ids.device,
+            )
+            sampled_token_ids = torch.cat([sampled_token_ids, _pad], dim=1)
+
+        if current_platform.is_xpu():""",
+        "A7 pad sampled_token_ids to the width receivers allocate",
+    )
+
     print("DSPARK_PP_PATCHES_DONE")
 
 
