@@ -2,7 +2,8 @@
 
 Box: 4× RTX 3090 (sm_86), driver 595.58.03, vLLM nightly `0.26.1rc1.dev651+g1d2d83a07`
 (clean reinstall, then our patch set only). Kimi-K3 4-layer slice + DSpark draft,
-`--load-format dummy`, `--enforce-eager`, `SKIP_KERNEL_WARMUP=1`.
+`--load-format dummy`, `--enforce-eager`. Warmup **enabled** (no
+`SKIP_KERNEL_WARMUP`) — see below.
 
 ## The bug
 
@@ -83,8 +84,12 @@ PP=4  shape=(11, 4096) sum=6.4611821672e-09 weighted=2.2653207910e-05 absmax=7.7
   reordering flips a near-tied argmax on a degenerate output" from a genuine
   parity gap needs real weights.
 - No speedup number, and acceptance is meaningless with a random draft.
-- Warmup is still skipped (`SKIP_KERNEL_WARMUP=1`); the warmup hang is a
-  separate, unfixed defect — see `specdec_pp4_2026-08-12.md`.
+- ~~Warmup is still skipped~~ — **A7 fixed the warmup hang too.** It was never a
+  separate defect: warmup's first sample after its prefill step is exactly the
+  no-draft-tokens case, so it broadcast the same narrow tensor. With A7 and no
+  `SKIP_KERNEL_WARMUP`, PP=4 reaches `STATE=served` in 50s with zero errors, and
+  a full gate run with warmup enabled reproduces the numbers above (acceptance
+  1.05, drafted 5.92 tok/s). `tools/skip_warmup_hack.py` is now obsolete.
 
 ## Is A7 an upstream bug?
 
