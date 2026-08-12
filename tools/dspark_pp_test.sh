@@ -57,7 +57,7 @@ serve() {  # serve <tag> <pp>
 ask() {
   curl -s http://127.0.0.1:18000/v1/completions -H 'Content-Type: application/json' \
     -d '{"model":"k3","prompt":"The quick brown fox jumps over the lazy dog and then","max_tokens":24,"temperature":0}' \
-    | $PY -c "import sys,json; d=json.load(sys.stdin); print(d['choices'][0]['text'])" 2>/dev/null
+    | PYTHONPATH= $PY -c "import sys,json; d=json.load(sys.stdin); print(d['choices'][0]['text'])" 2>/dev/null
 }
 
 echo "##### GATE 1: boot at PP=$PPN"
@@ -66,6 +66,7 @@ if serve pp2 "$PPN"; then echo "GATE1 PASS"; else
 fi
 MARK_PP2=$(grep -c "DSPARK_PROBE.*shape" srv_pp2.log)
 OUT_PP2=$(ask)
+sleep 8   # workers write the log asynchronously; without this the slice is empty
 # Compare only the taps produced by the REQUEST, and only the numeric payload:
 # the line prefix carries the rank name and pid ("Worker_PP3 pid=6801"), which
 # differ by construction, so a whole-line diff can never pass at PP>1. Warmup
@@ -81,6 +82,7 @@ echo "##### reference: PP=1"
 if serve pp1 1; then echo "PP1 boots"; else echo "PP1 FAIL"; exit 1; fi
 MARK_PP1=$(grep -c "DSPARK_PROBE.*shape" srv_pp1.log)
 OUT_PP1=$(ask)
+sleep 8
 grep "DSPARK_PROBE.*shape" srv_pp1.log | tail -n +$((MARK_PP1 + 1)) |
   sed 's/.*\[DSPARK_PROBE\] //' > probe_pp1.txt
 pkill -9 -f "[a]pi_server" 2>/dev/null
