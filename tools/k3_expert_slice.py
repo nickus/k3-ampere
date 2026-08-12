@@ -189,9 +189,13 @@ def main() -> int:
             text.setdefault(k, cfg[k])
     (out / "config.json").write_text(json.dumps(text, indent=1))
 
+    # K3 ships no tokenizer.json: the tokenizer is tiktoken, loaded by
+    # tokenization_kimi.py under trust_remote_code. Asking for tokenizer.json
+    # gets a 404, and a slice without tiktoken.model cannot be served at all.
     for extra in ("configuration_kimi_k3.py", "encoding_k3.py",
                   "generation_config.json", "tokenizer_config.json",
-                  "tokenizer.json"):
+                  "tokenization_kimi.py", "tiktoken.model",
+                  "modeling_kimi_k3.py", "modeling_kimi_linear.py"):
         try:
             (out / extra).write_bytes(get(BASE + extra))
         except Exception as e:
