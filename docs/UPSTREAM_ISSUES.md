@@ -1,4 +1,12 @@
-# Two upstream issues, drafted. NOT filed.
+# Two upstream issues — FILED 2026-08-13
+
+- #52069 — SupportsPP demanded of the draft model:
+  https://github.com/vllm-project/vllm/issues/52069
+- #52071 — spec decode under PP wrong with --no-async-scheduling:
+  https://github.com/vllm-project/vllm/issues/52071
+
+Both claims were re-checked against main @ 98f86b9c0232 immediately before
+filing, and the tracker was searched for duplicates (none found).
 
 Both reproduce in about a minute on 2 GPUs. Neither needs Kimi-K3 or our patches:
 issue 1 is a config-time rejection, issue 2 reproduces on any PP-capable model.
