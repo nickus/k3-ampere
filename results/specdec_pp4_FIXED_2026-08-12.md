@@ -778,3 +778,94 @@ concurrency.
 
 TTFT above is a prefix-cache hit, NOT prefill. There is no honest prefill number
 in this session; it needs unique prompts or caching disabled.
+
+---
+
+# Root cause, single and shared: `logits_start = query_end - num_logits` goes negative under PP
+
+Three failures that looked unrelated are one defect.
+
+| stand | proposer | PP | symptom |
+|---|---|---|---|
+| GLM-4.5-Air AWQ | mtp | 4 | OOB write in `_prepare_prefill_inputs_kernel`; after guarding that, gather assert |
+| K3 24-expert slice, 141 GB | dspark | 8 | gather assert at k=3; at k=1, output corrupted with token 0 |
+| 16-layer random stand | dspark | 2 and 8 | same gather assert, reproduces in ~1 minute |
+
+All of them end at `model_runner.py:1264`:
+
+```python
+sample_hidden_states = hidden_states[input_batch.logits_indices]
+```
+
+with
+
+```
+Assertion `ind >=0 && ind < ind_dim_size && "vectorized gather kernel index out
+of bounds"` failed
+```
+
+## The measurement
+
+A probe on that line, on the stand at PP=2:
+
+```
+healthy step:  hs=(4, 1024)  idx=[0, 1, 2, 3]      4 rows, 4 indices
+failing step:  hs=(3, 1024)  idx=[-1, 0, 1, 2]     3 rows, 4 indices, first is -1
+                              rows=[-0.008338, -0.008338, -0.008338, -0.008338]
+```
+
+Four identical row fingerprints: torch wraps -1 to the last row, so before the
+assert this silently read one wrong row four times. That is the same shape as the
+corrupted verification trace,
+`target=[16925, 16925, 16925, 16925]`, and the same shape as the `!`-filled
+output on real K3 weights, `!` being token id 0.
+
+## The arithmetic
+
+`_prepare_logits_indices_kernel`, in `v1/worker/gpu/input_batch.py`:
+
+```python
+num_logits   = cu_num_logits[batch_idx + 1] - cu_num_logits[batch_idx]  # = k + 1
+query_end    = query_start_loc[batch_idx + 1]
+logits_start = query_end - num_logits
+tl.store(logits_indices_ptr + cu_num_logits_start + block,
+         logits_start + block, mask=block < num_logits)
+```
+
+`num_logits` is fixed at `num_speculative_tokens + 1`: k drafts plus the token
+that was accepted before them. That holds without pipeline parallelism, because
+the scheduler knows the sampled token before it commits the next step.
+
+Under PP the next step is committed BEFORE the sampled token returns over the
+deferred relay, so a step can be scheduled carrying only the k drafts. Then
+`query_len = 3` while `num_logits = 4`, and `logits_start = 3 - 4 = -1`.
+
+With 3 rows present and 4 logits demanded there is no set of valid indices: this
+is not an off-by-one, it is the spec-decode bookkeeping and the PP scheduler
+disagreeing about how many tokens the step contains. The same disagreement
+produces the earlier `query_len -= num_rejected -> 0` in the draft prefill
+kernel; that one writes out of bounds, this one reads out of bounds.
+
+## Why the earlier PP=2 proof missed it
+
+The proof ran on a 4-layer stand. This reproduces on a 16-layer stand at the same
+PP=2, so depth - not PP degree - is what exposes it: more layers means more steps
+in flight before a request finishes, and therefore a step that gets committed
+without its sampled token. Cheap reproduction, ~1 minute per run:
+
+```
+STAND_LAYERS=16 python gen_slice_hf.py && python gen_dspark_draft.py
+PPS='2 2' bash verify_pp_compare.sh
+```
+
+## Status
+
+Not fixed. A clamp of `num_logits` to the query length stops the fault but leaves
+the k+1-th logit undefined, and everything downstream - `cu_num_logits`,
+`num_draft_tokens`, the rejection sampler's row layout - is sized k+1. Making
+those agree is a change to vLLM's spec bookkeeping, not a guard, and I am not
+landing that on rented hardware without a test suite to check it against.
+
+What is ready: an exact diagnosis, a one-minute reproduction that needs 2 GPUs
+rather than 8, and the evidence that it is upstream (the MTP case reproduces with
+our relay disabled).

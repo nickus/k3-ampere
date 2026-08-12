@@ -4,17 +4,24 @@ Reuses the shape-verified generator logic from k3-ampere; emits model.* names
 import json
 import urllib.request
 
+import os
+
 import torch
 from safetensors.torch import save_file
 
-OUT = "/workspace/k3/k3-slice-hf"
-import os
-
+OUT = os.environ.get("STAND_OUT", "/workspace/k3/k3-slice-hf")
 os.makedirs(OUT, exist_ok=True)
 
 # --- tensors (same formulas as k3-ampere/tools/gen_gguf_slice.py, slice cfg) ---
+# Depth is a knob because PP degree cannot exceed layer count: the 4-layer stand
+# cannot be run at PP=8, and PP=8 is where the draft relay was measured to break
+# on real weights. K3's real pattern is three KDA layers then one full-attention
+# layer, repeating (69 KDA + 24 MLA over 93), so a deeper stand keeps that shape
+# rather than inventing a new one.
+N_LAYERS = int(os.environ.get("STAND_LAYERS", "4"))
 C = dict(h=1024, H=8, V=163840, E=8, lat=512, mi=256, n_sh=2,
-         ql=1536, kvl=512, di=2048, n_layers=4, dense0=True, kda={0, 1, 2})
+         ql=1536, kvl=512, di=2048, n_layers=N_LAYERS, dense0=True,
+         kda={L for L in range(N_LAYERS) if L % 4 != 3})
 d, rope, fr = 128, 64, 128
 g = torch.Generator().manual_seed(42)
 T = {}
@@ -92,15 +99,17 @@ for f in ("config.json", "configuration_kimi_k3.py", "modeling_kimi_linear.py",
     urllib.request.urlretrieve(BASE + f, f"{OUT}/{'k3_real_config.json' if f == 'config.json' else f}")
 c = json.load(open(f"{OUT}/k3_real_config.json"))
 tc = c["text_config"]
-tc.update({"hidden_size": 1024, "intermediate_size": 2048, "num_hidden_layers": 4,
+tc.update({"hidden_size": 1024, "intermediate_size": 2048,
+           "num_hidden_layers": N_LAYERS,
            "num_attention_heads": 8, "num_key_value_heads": 8, "num_experts": 8,
            "num_experts_per_token": 2, "routed_expert_hidden_size": 512,
            "moe_intermediate_size": 256, "first_k_dense_replace": 1,
            "max_position_embeddings": 32768, "num_nextn_predict_layers": 0,
            "attn_res_block_size": 4})
 la = tc["linear_attn_config"]
-la["kda_layers"] = [1, 2, 3]
-la["full_attn_layers"] = [4]
+# 1-based in the config, unlike C["kda"] above.
+la["kda_layers"] = [L + 1 for L in sorted(C["kda"])]
+la["full_attn_layers"] = [L + 1 for L in range(N_LAYERS) if L not in C["kda"]]
 la["num_heads"] = 8
 tc.pop("quantization_config", None)
 
