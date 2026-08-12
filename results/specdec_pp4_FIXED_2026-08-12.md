@@ -76,7 +76,12 @@ PP=4  shape=(11, 4096) sum=6.4611821672e-09 weighted=2.2653207910e-05 absmax=7.7
   for most of the sequence and diverge in the tail. With random dummy draft
   weights and a degenerate repetitive completion, a chance draft acceptance
   changes the sequence; acceptance was 1.00 at PP=1 and 1.05 at PP=4. Whether
-  this is benign is **not yet measured**.
+  this is benign is **not yet measured**. What *is* measured: PP=4 is
+  deterministic — two requests to the same server and a request to a freshly
+  started one give byte-identical text — so the difference from PP=1 is a real
+  PP=1-vs-PP=4 difference, not run-to-run noise. Separating "benign FP
+  reordering flips a near-tied argmax on a degenerate output" from a genuine
+  parity gap needs real weights.
 - No speedup number, and acceptance is meaningless with a random draft.
 - Warmup is still skipped (`SKIP_KERNEL_WARMUP=1`); the warmup hang is a
   separate, unfixed defect — see `specdec_pp4_2026-08-12.md`.
