@@ -101,9 +101,36 @@ PP=4  shape=(11, 4096) sum=6.4611821672e-09 weighted=2.2653207910e-05 absmax=7.7
   differently under PP than at PP=1. It is not corruption of the generated
   content, and it is not "speculation under PP is wrong".
 
-  Still open: whether it also fires when the model stops naturally on EOS rather
-  than being truncated by the token limit. Dummy weights never emit EOS, so this
-  needs real weights or a stop-string test.
+  **Root cause found (2026-08-12, later).** Not the commit path and not the stop
+  boundary. With a working probe (the first one printed its own template — see
+  the retraction below), the target's verification logits differ per position:
+
+  ```
+  PP=1:  target=[100889, 100889, 100889, 100889]
+  PP=2:  target=[100889,  16925,  16925,  16925]
+  ```
+
+  Position 0 — the token that always commits — is **correct** under PP. Positions
+  1..k, the ones the drafts are verified against, all carry the **same wrong
+  token**, which is what a set of rows reading one identical bad hidden-state row
+  looks like. While every draft is rejected (`rejected=[3]`) the corruption is
+  invisible; on the one step where a draft was accepted (`sampled=[2]
+  rejected=[2]`) that wrong token, 16925, entered the output — it is the `做什么`
+  in the diverging tail.
+
+  So the defect is in the last rank's `sample_hidden_states =
+  hidden_states[input_batch.logits_indices]`, where `hidden_states` arrived over
+  `irecv_tensor_dict`: the speculative rows are taken from the wrong offsets.
+  That also explains why the visible damage looked tail-shaped and rare — it only
+  surfaces through an accepted draft.
+
+  Retraction: the earlier "verification traces are identical, so the defect is
+  downstream of sampling" was an artifact. That probe emitted doubled braces into
+  an f-string, so every line printed as the same literal template and diffed
+  clean. The "zero rejections" reading came from the same broken output.
+
+  Still open: whether it also fires when the model stops on EOS rather than the
+  token limit.
 
 - ~~Greedy text parity is BROKEN at every PP>=2~~ (superseded by the rows above) Four comparisons, same prompt, `temperature=0`:
 
