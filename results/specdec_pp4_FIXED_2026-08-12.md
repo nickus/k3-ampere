@@ -1011,3 +1011,36 @@ PPS='1 2' bash verify_pp_compare.sh        # PP=1 control vs PP=2, text + traces
 PP=1 is the reference and it is clean: 24 spec steps, every one
 `qlen=4 num_logits=4 ndraft=3`, zero negative indices. Any fix has to make PP=2
 match that AND reproduce PP=1's text exactly.
+
+### Defect #2 is periodic, not a startup edge
+
+Classifying every spec step at PP=2 with fix #1 applied:
+
+```
+spec steps with a zero anchor : 7
+  first decode after prefill  : 1     (computed == prefill_len)
+  mid-generation              : 6     (computed = 13, 17, 21, 25, 29 ...)
+spec steps with a real anchor : 19
+```
+
+The zeros land every 4 computed tokens - one full accept cycle at k=3 - so this
+is a phase in which the deferred relay systematically misses its step, not a
+transient at the start.
+
+### Why I am not closing it with a patch
+
+Fix #1 resolved a contradiction *within a single step*, so it could be checked
+where it was made. Defect #2 is delivery timing across the pipeline: the payload
+arrives `pp_size` steps later by construction, and the step needs it sooner.
+Three ways to close that, all of which change behaviour rather than a line:
+
+  - do not attach drafts while the previous token is in flight - under PP there
+    is almost always a token in flight, so this risks disabling speculation
+    entirely;
+  - consume the FIFO before building inputs - that stalls the pipeline, which is
+    the exact thing the deferred slot exists to avoid;
+  - carry draft VALUES in `scheduler_output` - upstream deliberately made that
+    dict counts-only to keep host-device traffic down.
+
+Choosing among those needs a regression suite and a maintainer's intent, not a
+guess on rented hardware. Recorded, reproducible in a minute, handed over.
