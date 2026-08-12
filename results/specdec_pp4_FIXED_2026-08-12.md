@@ -1044,3 +1044,62 @@ Three ways to close that, all of which change behaviour rather than a line:
 
 Choosing among those needs a regression suite and a maintainer's intent, not a
 guess on rented hardware. Recorded, reproducible in a minute, handed over.
+
+---
+
+# The cause was a FLAG, not a patch: `--no-async-scheduling`
+
+`next_decode_eligible_step` is assigned in exactly one place in the whole tree:
+
+```
+v1/core/sched/async_scheduler.py:49
+    request.next_decode_eligible_step = self.current_step + self.pp_size
+```
+
+and read in exactly one place:
+
+```
+v1/core/sched/scheduler.py:509
+    if self.current_step < request.next_decode_eligible_step:
+        # V2+PP+async: enforce `pp_size` steps between same-req decodes
+        # to match worker-side sampled-tokens broadcast slot ring cadence.
+```
+
+The base `Scheduler` - the one you get with `--no-async-scheduling` - reads that
+field and never sets it. It stays 0, the check never fires, and nothing keeps a
+request's decodes `pp_size` steps apart. The sampled-token broadcast ring is then
+read out of phase, which is every symptom chased above:
+
+  - the anchor's VALUE unavailable  -> token id 0 embedded -> `!` in the output
+  - the anchor's SLOT missing       -> `logits_start = query_end - num_logits < 0`
+
+Every measurement in this session ran with `--no-async-scheduling`, carried over
+from earlier deadlock debugging. Dropping it is what made spec decode correct.
+
+## Measured, Kimi-K3 24-expert slice, PP=8 on 8x3090, real DSpark draft, k=3
+
+Same build, same flags, concurrency 1, 256-token generations, 2 repeats:
+
+```
+spec off : 172.17, 172.18 ms TPOT   (5.81 tok/s)
+spec on  : 108.72, 109.71 ms TPOT   (9.16 tok/s)
+decode speedup: 1.577x     per prompt: min 1.54x  median 1.59x  max 1.62x
+greedy parity : 7/8 prompts byte-identical
+mean acceptance length: 4.00
+```
+
+## Two things that do not add up, stated rather than buried
+
+1. **Acceptance is exactly 4.00 with k=3** - the maximum. Every draft accepted in
+   every step. On a 24-of-448 expert slice whose output is degenerate that is
+   not impossible, but a rejection sampler that never rejects would look
+   identical, and would mean the served tokens are the DRAFT's, not the target's.
+2. **One prompt in eight diverges**, deterministically (both repeats agree within
+   each configuration):
+   - off: `' The\n- 1. The\n- 1. The\n- 1. The...'`
+   - on : `' The first time is a rotated sorted array in Go. The first time...'`
+   Lossless greedy speculation must not do that.
+
+These two point opposite ways: 7/8 parity argues the verifier works, acceptance
+4.00 argues it accepts unconditionally. Until that is resolved the 1.577x is
+**not** a number to quote.

@@ -27,10 +27,19 @@ import sys
 AUX_PREFIX = "aux_hidden_state_"
 
 
+# `--revert` swaps the direction of every replacement. Each block is an exact
+# literal substitution, so reversing it restores the file byte for byte - which
+# is what lets us ask "is this divergence ours?" without a pristine wheel.
+REVERT = "--revert" in sys.argv
+
+
 def patch(path, old, new, tag, optional=False):
     """Apply `old` -> `new` once. `optional` is for migrating an EARLIER form of
     one of our own patches: on a fresh tree that form is absent, and its absence
     is not a drifted anchor."""
+    if REVERT:
+        old, new = new, old
+        optional = True
     src = open(path).read()
     if new in src:
         print(f"  {tag}: already applied")

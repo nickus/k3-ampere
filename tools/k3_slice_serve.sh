@@ -37,14 +37,22 @@ export VLLM_USE_FLASHINFER_SAMPLER=0
 # costs ~9.7 GB resident, not the 4.73 GB of its checkpoint - it carries its own
 # 163840-row embedding and lm_head on top of the file. Re-solving with that:
 #   stage 7 <= 22 GB  =>  L*1.52 + 2.35 + 9.7 + 1 <= 22  =>  L <= 5
-export VLLM_PP_LAYER_PARTITION=${VLLM_PP_LAYER_PARTITION:-11,13,13,13,13,13,12,5}
+# NOTE: no --no-async-scheduling. Only AsyncScheduler assigns
+# `next_decode_eligible_step = current_step + pp_size`; the base scheduler reads
+# that field and never sets it, so with async scheduling off there is nothing
+# holding a request's decodes pp_size apart and the sampled-token broadcast ring
+# is read out of phase. Measured consequence on this exact model: token id 0
+# embedded as the anchor ('!' all over the output), then duplicated tokens.
+# Turning async scheduling back on is what made greedy output identical to the
+# spec-off baseline.
+export VLLM_PP_LAYER_PARTITION=${VLLM_PP_LAYER_PARTITION:-11,13,13,13,13,13,13,4}
 
 serve() {  # serve <spec yes|no>
   pkill -9 -f "[a]pi_server" 2>/dev/null; pkill -9 -f "[V]LLM::" 2>/dev/null; sleep 8
   local args=(--model "$MODEL" --served-model-name k3 --trust-remote-code
     --pipeline-parallel-size "$PP" --tensor-parallel-size 1
-    --max-model-len 512 --no-async-scheduling --max-num-seqs 1
-    --gpu-memory-utilization 0.98 --enforce-eager --port $PORT)
+    --max-model-len 384 --max-num-seqs 1 --no-enable-prefix-caching
+    --gpu-memory-utilization 0.95 --enforce-eager --port $PORT)
   [ "$1" = yes ] && args+=(--speculative-config \
     "{\"method\":\"dspark\",\"model\":\"$DRAFT\",\"num_speculative_tokens\":$K}")
   nohup /venv/nm/bin/python -m vllm.entrypoints.openai.api_server "${args[@]}" \

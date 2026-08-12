@@ -72,7 +72,15 @@ def one(port: int, prompt: str, idx: int, max_tokens: int,
     text = []
     n_chunks = 0
     usage = None
-    with urllib.request.urlopen(req, timeout=600) as r:
+    # Print the server's reason rather than a bare HTTPError traceback: a failed
+    # request here has twice cost a whole measurement pass on a model that takes
+    # twelve minutes to load.
+    try:
+        _resp = urllib.request.urlopen(req, timeout=600)
+    except urllib.error.HTTPError as e:
+        body = e.read().decode(errors="replace")[:400]
+        raise RuntimeError(f"HTTP {e.code} from server: {body}") from None
+    with _resp as r:
         for raw in r:
             line = raw.decode().strip()
             if not line.startswith("data: "):
