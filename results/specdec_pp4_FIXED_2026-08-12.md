@@ -73,8 +73,39 @@ PP=4  shape=(11, 4096) sum=6.4611821672e-09 weighted=2.2653207910e-05 absmax=7.7
   is not the same logical step as at PP=1. Gate 2's element-wise diff is only
   meaningful for the prefill tap. This is a limitation of the gate, not
   evidence of a defect — and equally, it is not evidence of correctness.
-- **Greedy text parity is BROKEN at every PP>=2, and this is now measured, not
-  suspected.** Four comparisons, same prompt, `temperature=0`:
+- **Greedy text parity — much narrower than first reported. Measured, then
+  measured again with the controls that matter.**
+
+  My first pass said "broken at every PP>=2". That is true as a raw string
+  comparison and **misleading as a description**. Two follow-ups pinned it:
+
+  | max_tokens (k=3, PP=2) | first divergence | distance from the end |
+  |---|---|---|
+  | 24 | #22 of 24 | 2 |
+  | 64 | #62 of 64 | 2 |
+
+  | k (PP=2, max_tokens=32) | first divergence | distance from the end |
+  |---|---|---|
+  | **1** | **none — 32 tokens identical** | — |
+  | 2 | #31 of 32 | 1 |
+  | 3 | #30 of 32 | 2 |
+
+  So the divergence is anchored to the **end of generation**, not to any absolute
+  position, and its size is **k - 1** tokens — it scales with the speculative
+  block, not with the pipeline depth. At `num_speculative_tokens=1` the PP=2
+  output is byte-identical to the PP=1 reference over the whole completion.
+
+  That makes this a **tail accounting defect at the stop boundary**: the final
+  speculative block produces up to k+1 tokens at once, generation is cut by
+  `max_tokens` inside that block, and the last k-1 of them are committed
+  differently under PP than at PP=1. It is not corruption of the generated
+  content, and it is not "speculation under PP is wrong".
+
+  Still open: whether it also fires when the model stops naturally on EOS rather
+  than being truncated by the token limit. Dummy weights never emit EOS, so this
+  needs real weights or a stop-string test.
+
+- ~~Greedy text parity is BROKEN at every PP>=2~~ (superseded by the rows above) Four comparisons, same prompt, `temperature=0`:
 
   | comparison | result |
   |---|---|

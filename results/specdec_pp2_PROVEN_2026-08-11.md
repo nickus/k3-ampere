@@ -4,7 +4,9 @@
 > title overstates them. Greedy output at PP=2 with speculation **differs** from
 > the PP=1 reference — measured the next day, together with the controls that
 > make it meaningful: PP alone preserves the text and speculation alone preserves
-> the text. Booting and answering is not correctness, and a matching tap
+> the text — but the gap is confined to the last `k-1` tokens and only when
+> generation is cut by the token limit; at `num_speculative_tokens=1` the PP=2
+> output is byte-identical over a whole completion. Booting and answering is not correctness, and a matching tap
 > fingerprint proves the taps arrive, not that verification consumes them
 > correctly. See `specdec_pp4_FIXED_2026-08-12.md`.
 
