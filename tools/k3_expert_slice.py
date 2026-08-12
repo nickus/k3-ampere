@@ -212,8 +212,11 @@ def main() -> int:
     text["num_experts"] = args.experts
     # Flat, text-only: the upstream config is multimodal and vLLM will otherwise
     # try to build a vision tower whose weights we deliberately did not fetch.
-    text["architectures"] = ["KimiLinearForCausalLM"]
-    text["model_type"] = cfg.get("model_type", "kimi_k3")
+    # Take the architecture and model_type from text_config, NOT from the top
+    # level: the top level says the multimodal type, and copying it here would
+    # send vLLM to build the very vision tower this slice deliberately omits.
+    text.setdefault("architectures", ["KimiLinearForCausalLM"])
+    text.setdefault("model_type", "kimi_linear")
     for k in ("bos_token_id", "eos_token_id", "pad_token_id", "dtype",
               "tie_word_embeddings"):
         if k in cfg:
