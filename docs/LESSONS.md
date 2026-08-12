@@ -223,3 +223,13 @@ process was alive and the cache grew — so it took 20 minutes of watching a
 counter to notice that 320 MB in 20 minutes meant four more hours. One 20-second
 `curl -w '%{speed_download}'` against the index you will actually pull from
 answers it before you commit. `bootstrap_box.sh` now aborts below 50 kB/s.
+
+**31. On vast.ai, budget for a high base rate of dead hosts.**
+In one session: eight rentals, four unusable. Three died with the identical
+`OCI runtime create failed ... failed to inject CDI devices: unresolvable CDI
+devices` — the host cannot hand its GPUs to the container — and one accepted the
+rental but refused SSH even after the key was attached through the API. Renting a
+*whole* machine (offered GPUs == machine GPUs) reduced it but did not prevent it.
+The cost is wall-clock, not money: a dead host bills pennies. So detect fast —
+poll `status_msg` for that OCI string and abandon immediately rather than waiting
+out the boot — and expect to try two or three hosts for anything time-critical.
