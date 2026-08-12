@@ -73,7 +73,30 @@ PP=4  shape=(11, 4096) sum=6.4611821672e-09 weighted=2.2653207910e-05 absmax=7.7
   is not the same logical step as at PP=1. Gate 2's element-wise diff is only
   meaningful for the prefill tap. This is a limitation of the gate, not
   evidence of a defect — and equally, it is not evidence of correctness.
-- **Greedy text parity PP=1 vs PP=4 is not established.** The two outputs agree
+- **Greedy text parity is BROKEN at every PP>=2, and this is now measured, not
+  suspected.** Four comparisons, same prompt, `temperature=0`:
+
+  | comparison | result |
+  |---|---|
+  | PP=1 no-spec vs PP=4 no-spec | **SAME** — pipeline parallelism alone preserves the text |
+  | PP=1 no-spec vs PP=1 + spec  | **SAME** — speculation alone preserves the text, as it must |
+  | PP=1 no-spec vs PP=2 + spec  | **DIFFER** |
+  | PP=1 no-spec vs PP=3 + spec  | **DIFFER** |
+  | PP=1 no-spec vs PP=4 + spec  | **DIFFER** |
+
+  Each factor is innocent alone and the combination is not, so this is a real
+  defect in the PP+speculation path — not floating-point reordering, and not a
+  property of the dummy weights. It appears at **PP=2**, i.e. it does not need a
+  middle rank.
+
+  **This retracts the implication of `specdec_pp2_PROVEN_2026-08-11.md`.** That
+  file's two gates are still literally true — the engine boots at PP=2 and the
+  taps the draft consumes are bit-identical — but "boots and answers" was never
+  correctness, and the tap fingerprint only proves the taps arrive, not that
+  verification uses them correctly. Greedy parity was never checked there; the
+  gate that would have caught it compared strings contaminated by a probe banner.
+
+- ~~Greedy text parity PP=1 vs PP=4 is not established.~~ The two outputs agree
   for most of the sequence and diverge in the tail. With random dummy draft
   weights and a degenerate repetitive completion, a chance draft acceptance
   changes the sequence; acceptance was 1.00 at PP=1 and 1.05 at PP=4. Whether

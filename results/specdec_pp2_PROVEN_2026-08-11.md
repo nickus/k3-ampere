@@ -1,5 +1,13 @@
 # Speculative decoding for K3 works under pipeline parallelism (2×RTX 3090)
 
+> **CORRECTION (2026-08-12).** The gates below are true as written, but the
+> title overstates them. Greedy output at PP=2 with speculation **differs** from
+> the PP=1 reference — measured the next day, together with the controls that
+> make it meaningful: PP alone preserves the text and speculation alone preserves
+> the text. Booting and answering is not correctness, and a matching tap
+> fingerprint proves the taps arrive, not that verification consumes them
+> correctly. See `specdec_pp4_FIXED_2026-08-12.md`.
+
 Measured 2026-08-11 on 2×RTX 3090 (sm_86), vLLM main `dev638+g52be12cfa`,
 4-layer synthetic K3 slice + matched miniature DSpark draft, dummy weights,
 `--pipeline-parallel-size 2`, `num_speculative_tokens 1`.
