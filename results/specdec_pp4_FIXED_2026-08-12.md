@@ -576,3 +576,32 @@ Consequences for this work:
    published run is B200/H200/GB10.
 3. **Statistically meaningful speedup numbers require real weights.** Acceptance
    rate and tokens/s on a dummy 4-layer slice are meaningless by construction.
+
+## PROVEN on the right instrument: the corrupted quantity is now correct
+
+Comparing the target's verification logits — the exact thing the missing draft
+tokens corrupted — between PP=1 and PP=2, with the relay applied:
+
+```
+PP=1:  ndraft=3 target=[100889, 100889, 100889, 100889] sampled=[1] rejected=[3]
+PP=2:  ndraft=3 target=[100889, 100889, 100889, 100889] sampled=[1] rejected=[3]
+       cmp: IDENTICAL   (12 lines each, byte for byte)
+```
+
+Before the fix the same comparison gave `PP=2 target=[100889, 16925, 16925,
+16925]` — position 0 right, the speculative positions all carrying one wrong
+token derived from `embedding(0)`.
+
+This is weight-independent. It does not care that the draft is random, because it
+compares the *target's* verification against itself across PP degrees. Greedy
+text parity, which I used for hours, cannot do that on a dummy-weight stand — by
+the PR author's own description the failure mode is silent and shows up only as a
+depressed acceptance rate.
+
+Checked the probe itself before believing the result: the traces contain real
+token ids, not the boilerplate that fooled an earlier run.
+
+**Status: the plumbing is fixed and demonstrated at PP=2 on sm_86.** What remains
+is the measurement that matters — acceptance rate and throughput on real weights,
+at PP=1 / 2 / 4, which is both the number we owe and the evidence #50514 says it
+needs to lift its own `pp <= 2` cap.
