@@ -53,15 +53,15 @@ def main() -> int:
                 else []
             )
             print(
-                f"{TAG} pid={{_os.getpid()}} ndraft={{input_batch.num_draft_tokens}} "
-                f"target={{logits.argmax(dim=-1).flatten().tolist()[:8]}} draft={{_d}} "
-                f"sampled={{sampler_output.num_sampled.flatten().tolist()[:8]}} "
-                f"rejected={{sampler_output.num_rejected.flatten().tolist()[:8]}}",
+                f"[VERIFY] pid={_os.getpid()} ndraft={input_batch.num_draft_tokens} "
+                f"target={logits.argmax(dim=-1).flatten().tolist()[:8]} draft={_d} "
+                f"sampled={sampler_output.num_sampled.flatten().tolist()[:8]} "
+                f"rejected={sampler_output.num_rejected.flatten().tolist()[:8]}",
                 flush=True,
             )
         except Exception as _e:  # instrumentation must never break the server
-            print(f"{TAG} probe error: {{_e}}", flush=True)
-'''.replace("{TAG}", TAG)
+            print("[VERIFY] probe error:", _e, flush=True)
+'''
 
     target.write_text(src.replace(anchor, probe + anchor, 1))
     print(f"verify probe installed in {target}")
