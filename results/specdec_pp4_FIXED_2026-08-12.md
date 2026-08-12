@@ -1103,3 +1103,30 @@ mean acceptance length: 4.00
 These two point opposite ways: 7/8 parity argues the verifier works, acceptance
 4.00 argues it accepts unconditionally. Until that is resolved the 1.577x is
 **not** a number to quote.
+
+## The acceptance counter is not usable; the timings are
+
+Re-ran the same stand at k=1:
+
+```
+k=3:  TPOT 108.72 / 109.71 ms   mean acceptance length 4.00   (= k+1, the max)
+k=1:  TPOT 214.54 / 213.61 ms   mean acceptance length 2.00   (= k+1, the max)
+baseline (spec off): 172.17 / 172.18 ms
+```
+
+vLLM's `mean acceptance length` reads exactly `k+1` in both runs. A counter that
+returns the maximum regardless of k is reporting nothing, so the earlier worry
+that "4.00 means the verifier never rejects" cannot be settled from it either
+way - and should not be quoted as an acceptance rate.
+
+The timings settle it in the other direction. If drafts were accepted
+unconditionally, k=1 would emit 2 tokens per step and land near half the baseline
+TPOT. It is **slower than baseline** - 214 ms against 172 ms - which is what real
+speculation looks like when the draft is wrong often enough that verifying it
+does not pay for itself. At k=3 it does pay: 1.577x.
+
+So: timings are trustworthy and repeatable (0.01% and 0.9% across repeats), the
+acceptance counter is not, and one prompt in eight still diverges
+deterministically between spec-on and spec-off. That last one is the open item -
+lossless greedy speculation must not change any output - and it is the reason
+1.577x is reported here with the caveat attached rather than as a headline.
