@@ -1217,3 +1217,36 @@ This is also a caution for the slice as an instrument: it is sound for mechanism
 and timing, and it must not be used for any test whose verdict depends on exact
 token equality, because one prompt in eight will not survive a batch-shape
 change on its own.
+
+## Concurrency on K3: baseline only, and why
+
+Spec off, PP=8, 256-token generations, 2 repeats each:
+
+```
+conc   TPOT              per request     aggregate
+  1    172.18, 172.19    5.81 tok/s      5.81 tok/s
+  2    206.10, 207.88    4.83 tok/s      9.66 tok/s
+  4    271.08, 273.11    3.68 tok/s     14.70 tok/s
+```
+
+Unlike GLM at PP=4, per-request latency rises with load here, so this pipeline is
+already reasonably fed at low concurrency — 8 stages over a 141 GB model.
+
+**Spec on could not be swept.** At `--max-num-seqs` above 1 the engine refuses to
+start:
+
+```
+ValueError: To serve at least one request with the model's max seq len (384),
+0.54 GiB KV cache is needed, which is larger than the available KV cache memory
+```
+
+The arithmetic is not close: 141.3 GB of weights plus a 9.7 GB resident draft on
+the last stage leaves under a gigabyte for KV across 8x24 GB, and K3's KDA linear
+attention costs a fixed ~0.48 GiB of state per sequence regardless of context
+length. So the 1.577x figure is a concurrency-1 number, and on THIS box it cannot
+be anything else.
+
+That is a property of squeezing a 141 GB model onto 8 cards, not of speculative
+decoding: on the 50-card rig the same model leaves room for both the draft and a
+real KV budget. It does mean the measurement Fable asked for - where the spec
+speedup crosses over as the pipeline fills - has to be made on the rig, not here.
