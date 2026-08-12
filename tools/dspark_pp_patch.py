@@ -27,10 +27,16 @@ import sys
 AUX_PREFIX = "aux_hidden_state_"
 
 
-def patch(path, old, new, tag):
+def patch(path, old, new, tag, optional=False):
+    """Apply `old` -> `new` once. `optional` is for migrating an EARLIER form of
+    one of our own patches: on a fresh tree that form is absent, and its absence
+    is not a drifted anchor."""
     src = open(path).read()
     if new in src:
         print(f"  {tag}: already applied")
+        return
+    if optional and old not in src:
+        print(f"  {tag}: not present, nothing to migrate")
         return
     assert old in src, f"{tag}: anchor missing in {path}"
     open(path, "w").write(src.replace(old, new, 1))
@@ -155,13 +161,37 @@ def main(sp: str) -> None:
     # `verify_with_parallel_config` demands the draft implement SupportsPP —
     # which it does not, and should not: the draft is NOT pipelined, it runs
     # whole on one rank. Verify it as the single-stage model it is.
+    #
+    # This started out gated on `method == "dspark"`, which was too narrow and
+    # was hiding a general defect. In the V2 runner the drafter is built under
+    #
+    #     if self.speculative_config is not None:
+    #         if self.is_last_pp_rank:
+    #             self.speculator = init_speculator(...)
+    #
+    # so NO draft of any method is ever split across pipeline stages. The
+    # SupportsPP question is therefore the wrong question for a draft model, and
+    # asking it is what blocks every MTP head — Glm4MoeMTP, DeepSeekMTP and the
+    # other ~20 entries of MTPModelTypes, none of which inherit SupportsPP —
+    # from running under PP at all. Measured: GLM-4.5-Air + mtp at PP=4 dies in
+    # `create_engine_config`, before a single weight is loaded.
+    #
+    # Only the verification is relaxed; the config object is restored in
+    # `finally`, so rank and world-size bookkeeping downstream is untouched.
     spec = f"{sp}/vllm/config/speculative.py"
+    _a0_general = """        if self.draft_model_config:
+            _dpc = self.draft_parallel_config
+            if _dpc.pipeline_parallel_size > 1:
+                _pp = _dpc.pipeline_parallel_size
+                object.__setattr__(_dpc, "pipeline_parallel_size", 1)
+                try:
+                    self.draft_model_config.verify_with_parallel_config(_dpc)
+                finally:
+                    object.__setattr__(_dpc, "pipeline_parallel_size", _pp)
+            else:
+                self.draft_model_config.verify_with_parallel_config(_dpc)"""
     patch(
         spec,
-        """        if self.draft_model_config:
-            self.draft_model_config.verify_with_parallel_config(
-                self.draft_parallel_config
-            )""",
         """        if self.draft_model_config:
             _dpc = self.draft_parallel_config
             _is_dspark = getattr(self, "method", None) == "dspark" or any(
@@ -176,6 +206,17 @@ def main(sp: str) -> None:
                     object.__setattr__(_dpc, "pipeline_parallel_size", _pp)
             else:
                 self.draft_model_config.verify_with_parallel_config(_dpc)""",
+        _a0_general,
+        "A0-migrate drop the dspark-only gate",
+        optional=True,
+    )
+    patch(
+        spec,
+        """        if self.draft_model_config:
+            self.draft_model_config.verify_with_parallel_config(
+                self.draft_parallel_config
+            )""",
+        _a0_general,
         "A0 verify draft as single-stage",
     )
 
