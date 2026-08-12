@@ -24,10 +24,11 @@ safetensors shards, so it moves ~152 GB rather than 837.
 """
 
 import argparse
+import concurrent.futures as cf
 import json
-import os
 import struct
 import sys
+import threading
 import urllib.request
 from pathlib import Path
 
@@ -83,6 +84,11 @@ def main() -> int:
     ap.add_argument("--experts", type=int, default=24)
     ap.add_argument("--out", default="/workspace/models/k3-slice")
     ap.add_argument("--shards", default="", help="e.g. 1-96, for resuming")
+    # One connection measured ~4.5 MB/s sustained against HF, which is 9 hours
+    # for this slice - longer than the box's remaining credit. Shards are
+    # independent, so fan out; each worker peaks at roughly 2x its shard in RAM
+    # (raw spans plus the tensors built from them), and the box has 500 GB.
+    ap.add_argument("--workers", type=int, default=8)
     args = ap.parse_args()
 
     import numpy as np
@@ -102,15 +108,23 @@ def main() -> int:
 
     new_map: dict[str, str] = {}
     total_bytes = 0
-    for si, shard in enumerate(shards, 1):
+    lock = threading.Lock()
+    done = [0]
+
+    def do_shard(shard: str) -> dict[str, str]:
+        nonlocal total_bytes
+        mine: dict[str, str] = {}
         dst = out / shard
         if dst.exists():
             hdr, _ = read_header(shard)
             for name in hdr:
                 if name != "__metadata__" and keep_tensor(name, args.experts):
-                    new_map[name] = shard
-            print(f"[{si}/{len(shards)}] {shard}: present, skipped", flush=True)
-            continue
+                    mine[name] = shard
+            with lock:
+                done[0] += 1
+                print(f"[{done[0]}/{len(shards)}] {shard}: present, skipped",
+                      flush=True)
+            return mine
 
         hdr, data_start = read_header(shard)
         wanted = [
@@ -118,8 +132,11 @@ def main() -> int:
             if n != "__metadata__" and keep_tensor(n, args.experts)
         ]
         if not wanted:
-            print(f"[{si}/{len(shards)}] {shard}: nothing to keep", flush=True)
-            continue
+            with lock:
+                done[0] += 1
+                print(f"[{done[0]}/{len(shards)}] {shard}: nothing to keep",
+                      flush=True)
+            return mine
 
         wanted.sort(key=lambda kv: kv[1]["data_offsets"][0])
         tensors: dict[str, torch.Tensor] = {}
@@ -133,9 +150,12 @@ def main() -> int:
             else:
                 spans.append([s, e])
         blob: dict[tuple[int, int], bytes] = {}
+        got = 0
         for s, e in spans:
             blob[(s, e)] = get(BASE + shard, data_start + s, data_start + e - 1)
-            total_bytes += e - s
+            got += e - s
+        with lock:
+            total_bytes += got
 
         for name, info in wanted:
             s, e = info["data_offsets"]
@@ -162,15 +182,26 @@ def main() -> int:
             elif name.endswith("gate.e_score_correction_bias"):
                 t = t[: args.experts].clone()
             tensors[name] = t
-            new_map[name] = shard
+            mine[name] = shard
 
-        save_file(tensors, str(dst), metadata={"format": "pt"})
+        # Write through a temp name: a shard killed mid-write would otherwise be
+        # left truncated, and the resume path trusts `dst.exists()`.
+        tmp = dst.with_suffix(".partial")
+        save_file(tensors, str(tmp), metadata={"format": "pt"})
+        tmp.rename(dst)
         del tensors, blob
-        print(
-            f"[{si}/{len(shards)}] {shard}: {len(wanted)} tensors, "
-            f"{total_bytes / 1e9:.1f} GB so far",
-            flush=True,
-        )
+        with lock:
+            done[0] += 1
+            print(
+                f"[{done[0]}/{len(shards)}] {shard}: {len(wanted)} tensors, "
+                f"{total_bytes / 1e9:.1f} GB so far",
+                flush=True,
+            )
+        return mine
+
+    with cf.ThreadPoolExecutor(max_workers=args.workers) as pool:
+        for mine in pool.map(do_shard, shards):
+            new_map.update(mine)
 
     (out / "model.safetensors.index.json").write_text(
         json.dumps({"metadata": {"total_size": total_bytes}, "weight_map": new_map})
