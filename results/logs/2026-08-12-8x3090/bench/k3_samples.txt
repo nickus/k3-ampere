@@ -1,0 +1,54 @@
+--- k3_specno | Write a Python function that merges two sorted lists.
+' The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a'
+
+--- k3_specno | Explain what a race condition is.
+' Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition'
+
+--- k3_specyes | Write a Python function that merges two sorted lists.
+' The Python Python function Python that Python merges Python two two sorted sorted sorted sorted lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists lists'
+
+--- k3_specyes | Explain what a race condition is.
+' Explain are what. lists Explain Explain are what what. lists lists Explain Explain Explain are Explain what what what.. lists lists lists Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain Explain'
+
+--- k3_specyes | Write a Python function that merges two sorted lists.
+' The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a'
+
+--- k3_specyes | Explain what a race condition is.
+' Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition'
+
+--- k3_specyes | Write a Python function that merges two sorted lists.
+' The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a'
+
+--- k3_specyes | Explain what a race condition is.
+' Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition'
+
+--- k3_specyes | Write a Python function that merges two sorted lists.
+' The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a'
+
+--- k3_specyes | Explain what a race condition is.
+' Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition'
+
+--- k3_specyes | Write a Python function that merges two sorted lists.
+' The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a'
+
+--- k3_specyes | Explain what a race condition is.
+' Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition'
+
+--- k3_specno | Write a Python function that merges two sorted lists.
+' The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a'
+
+--- k3_specno | Explain what a race condition is.
+' Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition'
+
+--- k3_specyes | Write a Python function that merges two sorted lists.
+' The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a'
+
+--- k3_specyes | Explain what a race condition is.
+' Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition'
+
+--- k3_specno | Write a Python function that merges two sorted lists.
+' The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a Python function that merges two sorted lists. The Python function is a'
+
+--- k3_specno | Explain what a race condition is.
+' Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition is. Explain what a race condition'
+
