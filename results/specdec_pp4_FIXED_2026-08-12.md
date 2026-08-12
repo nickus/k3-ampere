@@ -101,6 +101,22 @@ PP=4  shape=(11, 4096) sum=6.4611821672e-09 weighted=2.2653207910e-05 absmax=7.7
   read the filler. The parity defect predates A7 — the hang was simply masking
   it.
 
+  **Localised.** 22 of the 24 generated tokens are identical; the first
+  divergence is at generated token #22:
+
+  ```
+  ref (PP=1)  ... 决赛中 有那么多 决赛中 有那么多 决赛中 | 有那么多
+  PP=2 + spec ... 决赛中 有那么多 决赛中 有那么多 决赛中 | 决赛中
+  ```
+
+  The completion is a strict two-token cycle, and PP=2 breaks it by repeating.
+  That lines up with the acceptance counters: PP=1 reports mean acceptance
+  length **1.00** (nothing accepted) while every PP>=2 run reports **1.05**. So
+  the PP path accepts a draft that PP=1 rejects, and the accepted token is not
+  the one the target would have produced. The next step is to compare the
+  verification logits the rejection sampler sees at PP=1 and PP=2 for that
+  step — not to guess at the bookkeeping.
+
 - ~~Greedy text parity PP=1 vs PP=4 is not established.~~ The two outputs agree
   for most of the sequence and diverge in the tail. With random dummy draft
   weights and a degenerate repetitive completion, a chance draft acceptance
