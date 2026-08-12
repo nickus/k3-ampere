@@ -96,9 +96,11 @@ PP=4  shape=(11, 4096) sum=6.4611821672e-09 weighted=2.2653207910e-05 absmax=7.7
   verification uses them correctly. Greedy parity was never checked there; the
   gate that would have caught it compared strings contaminated by a probe banner.
 
-  A7 is **not** the cause: padding with `-1` and padding with `0` produce
-  byte-identical output, so the receivers do respect `num_sampled` and never
-  read the filler. The parity defect predates A7 — the hang was simply masking
+  A7 is **not** the cause, checked three independent ways: padding with `-1` and
+  with `0` produces byte-identical output; a deliberately conspicuous filler
+  (`12345`) never appears in the generated ids; and the verification traces are
+  identical with the padding in place. The receivers do respect `num_sampled`
+  and never commit the filler. The parity defect predates A7 — the hang was simply masking
   it.
 
   **Localised.** 22 of the 24 generated tokens are identical; the first
@@ -131,6 +133,15 @@ PP=4  shape=(11, 4096) sum=6.4611821672e-09 weighted=2.2653207910e-05 absmax=7.7
   `PPHandler` FIFO that hands "previous sampled outputs" back `pp_size` steps
   later. The symptom fits: PP=2 repeats the previous token instead of advancing
   the two-token cycle, i.e. one token too many is committed.
+
+  Where to look next, from reading the commit path rather than guessing: the
+  last rank calls `postprocess_sampled` with `query_start_loc`, while the
+  non-last ranks get it from `PPHandler.get_prev_sampled_outputs`, whose dict
+  carries only `sampled_tokens`, `num_sampled`, `num_rejected` and
+  `idx_mapping` — so `query_start_loc` is `None` there and `post_update` runs
+  with different inputs on the two sides. That asymmetry is the first thing to
+  instrument: log `num_computed_tokens` and `total_len` per rank per step at
+  PP=1 and PP=2 and find the first step where they disagree.
 
 - ~~Greedy text parity PP=1 vs PP=4 is not established.~~ The two outputs agree
   for most of the sequence and diverge in the tail. With random dummy draft
