@@ -65,60 +65,118 @@ def main() -> int:
     runner = sp / "v1" / "worker" / "gpu" / "model_runner.py"
     ok = True
 
-    # R3: remember the spec depth and the pending buffer.
+    # ---- V1: one rank-invariant switch, decided from config, not from local
+    # objects. `self.speculator` is None on every non-last rank by construction,
+    # and `num_speculative_steps > 0` also catches diffusion models that have no
+    # speculator at all - either predicate makes the sender and the receiver
+    # disagree, which is a cluster hang, not a wrong answer.
+    ok &= patch(
+        pp,
+        """    def __init__(
+        self, max_num_reqs: int, num_speculative_steps: int, device: torch.device
+    ):""",
+        """    def __init__(
+        self,
+        max_num_reqs: int,
+        num_speculative_steps: int,
+        device: torch.device,
+        relay_drafts: bool = False,
+    ):""",
+        "V1 handler takes the switch",
+    )
     ok &= patch(
         pp,
         "        self.max_sample_len = num_speculative_steps + 1",
         "        self.max_sample_len = num_speculative_steps + 1\n"
         "        self.num_speculative_steps = num_speculative_steps\n"
-        "        self._pending_drafts: torch.Tensor | None = None",
-        "R3 remember spec depth",
+        "        self.relay_drafts = relay_drafts and num_speculative_steps > 0",
+        "V1b store it",
     )
-
-    # R1: carry the drafts on the slot. MUST go last in the dataclass - a field
-    # with a default before the non-default ones does not even construct.
     ok &= patch(
-        pp,
-        "    gen_at_receive_np: np.ndarray  # [num_reqs]",
-        "    gen_at_receive_np: np.ndarray  # [num_reqs]\n"
-        "    # Drafts for these requests' NEXT step, relayed from the last rank.\n"
-        "    draft_tokens: torch.Tensor | None = None",
-        "R1 slot carries drafts",
-    )
-
-    # R2: receiver posts the third broadcast, matching the sender's later send.
-    ok &= patch(
-        pp,
-        """            combined = torch.empty(2, num_reqs, dtype=torch.int32, device=self.device)""",
-        """            combined = torch.empty(2, num_reqs, dtype=torch.int32, device=self.device)
-            self._pending_drafts = torch.empty(
-                num_reqs,
-                max(1, self.num_speculative_steps),
-                dtype=torch.int64,
+        runner,
+        """                num_speculative_steps=self.num_speculative_steps,
                 device=self.device,
             )""",
-        "R2 receiver allocates the draft buffer",
+        """                num_speculative_steps=self.num_speculative_steps,
+                device=self.device,
+                relay_drafts=self.speculative_config is not None,
+            )""",
+        "V1c runner passes it",
     )
 
-    # R2b: the receive itself, after the two existing ones so the order on the
-    # group matches the sender.
+    # ---- V2: the drafts ride the EXISTING broadcast. Two lines above the
+    # insertion point the author stacks num_sampled and num_rejected precisely to
+    # avoid a second collective; a third one would contradict that in the same
+    # function. Same function on both sides, same predicate, so the ordering is
+    # symmetric by construction.
+    ok &= patch(
+        pp,
+        """    def broadcast(
+        self,
+        sampled_token_ids: torch.Tensor,
+        num_sampled: torch.Tensor,
+        num_rejected: torch.Tensor,
+        input_batch: InputBatch,
+    ) -> None:""",
+        """    def broadcast(
+        self,
+        sampled_token_ids: torch.Tensor,
+        num_sampled: torch.Tensor,
+        num_rejected: torch.Tensor,
+        input_batch: InputBatch,
+        draft_tokens: torch.Tensor | None = None,
+    ) -> None:""",
+        "V2 sender signature",
+    )
+    ok &= patch(
+        pp,
+        """            for tensor in (sampled_token_ids, num_sampled, num_rejected):
+                tensor.record_stream(self.broadcast_stream)""",
+        """            if self.relay_drafts:
+                assert draft_tokens is not None
+                # A fresh gather, never propose()'s view of the speculator's
+                # persistent buffer: record_stream defers allocator reuse, it does
+                # not stop the next step overwriting that memory from the main
+                # stream while this read is still in flight.
+                _d = draft_tokens.contiguous()
+                torch.distributed.broadcast(
+                    _d, src=self.last_rank, group=self.broadcast_group
+                )
+                _d.record_stream(self.broadcast_stream)
+            for tensor in (sampled_token_ids, num_sampled, num_rejected):
+                tensor.record_stream(self.broadcast_stream)""",
+        "V2b sender payload",
+    )
     ok &= patch(
         pp,
         """            event = self.broadcast_stream.record_event()
             num_sampled, num_rejected = combined.unbind(dim=0)""",
-        """            if self.num_speculative_steps > 0:
-                torch.distributed.broadcast(
-                    self._pending_drafts,
-                    src=self.last_rank,
-                    group=self.broadcast_group,
+        """            drafts = None
+            if self.relay_drafts:
+                drafts = torch.empty(
+                    num_reqs,
+                    self.num_speculative_steps,
+                    dtype=torch.int64,
+                    device=self.device,
                 )
-                self._pending_drafts.record_stream(self.main_stream)
+                torch.distributed.broadcast(
+                    drafts, src=self.last_rank, group=self.broadcast_group
+                )
+                drafts.record_stream(self.main_stream)
             event = self.broadcast_stream.record_event()
             num_sampled, num_rejected = combined.unbind(dim=0)""",
-        "R2b receiver third broadcast",
+        "V2c receiver payload",
     )
 
-    # R5: stash it on the slot (positional - it is the last field).
+    # ---- V3: carry it on the deferred slot, exactly like the sampled tokens.
+    ok &= patch(
+        pp,
+        "    gen_at_receive_np: np.ndarray  # [num_reqs]",
+        "    gen_at_receive_np: np.ndarray  # [num_reqs]\n"
+        "    # Drafts for these requests' NEXT step; None when not relaying.\n"
+        "    draft_tokens: torch.Tensor | None = None",
+        "V3 slot field",
+    )
     ok &= patch(
         pp,
         """            need_sampled_mask,
@@ -127,13 +185,11 @@ def main() -> int:
         return bool(need_sampled_mask.all())""",
         """            need_sampled_mask,
             gen_at_receive_np,
-            self._pending_drafts,
+            drafts,
         )
         return bool(need_sampled_mask.all())""",
-        "R5 stash drafts on the slot",
+        "V3b stash on slot",
     )
-
-    # R6: hand them back with the sampled tokens, on the same lag.
     ok &= patch(
         pp,
         """            num_rejected=slot.num_rejected,
@@ -143,29 +199,12 @@ def main() -> int:
             idx_mapping=idx_mapping,
             draft_tokens=slot.draft_tokens,
         )""",
-        "R6 return drafts from the FIFO",
+        "V3c return from FIFO",
     )
 
-    # R4: the sender half, issued after propose().
-    ok &= patch(
-        pp,
-        "    def get_prev_sampled_outputs(self)",
-        '''    def broadcast_drafts(self, draft_tokens: torch.Tensor) -> None:
-        """Send freshly proposed drafts on the same relay, after propose()."""
-        assert self.is_last_rank
-        with torch.cuda.stream(self.broadcast_stream):
-            self.broadcast_stream.wait_stream(self.main_stream)
-            _d = draft_tokens.contiguous()
-            torch.distributed.broadcast(
-                _d, src=self.last_rank, group=self.broadcast_group
-            )
-            _d.record_stream(self.broadcast_stream)
-
-    def get_prev_sampled_outputs(self)''',
-        "R4 sender half",
-    )
-
-    # R7: accept and apply them on the receiving ranks.
+    # ---- V4: apply on the receiving ranks. idx_mapping carries -1 for rows
+    # filtered since receive - advanced indexing would wrap that to the LAST row
+    # and silently clobber an unrelated request, so mask first.
     ok &= patch(
         runner,
         """        num_rejected: torch.Tensor,
@@ -176,51 +215,69 @@ def main() -> int:
         draft_tokens: torch.Tensor | None = None,
     ) -> None:
         if draft_tokens is not None and not self.is_last_pp_rank:
-            # idx_mapping carries -1 for rows filtered since receive; those must
-            # not be written, or they land on the last row of the buffer.
             _valid = idx_mapping >= 0
             if bool(_valid.any()):
                 self.req_states.draft_tokens[idx_mapping[_valid]] = draft_tokens[
                     _valid
                 ]""",
-        "R7 apply drafts on receiving ranks",
+        "V4 apply on receivers",
     )
 
-    # R8: send them the moment they exist.
+    # ---- V5: move the relay below propose() so the payload is this step's
+    # drafts, and send the fresh gather the runner already builds.
     ok &= patch(
         runner,
-        """            self.req_states.draft_tokens[input_batch.idx_mapping] = draft_tokens""",
-        """            self.req_states.draft_tokens[input_batch.idx_mapping] = draft_tokens
-            if self.pp_handler is not None and self.num_speculative_steps > 0:
-                self.pp_handler.broadcast_drafts(draft_tokens)""",
-        "R8 send drafts after propose",
+        """        if self.pp_handler is not None:
+            # Broadcast to non-last PP ranks (handles spec decode multi-token).
+            self.pp_handler.broadcast(
+                sampler_output.sampled_token_ids,
+                num_sampled,
+                num_rejected,
+                input_batch,
+            )""",
+        """        _pp_relay = None
+        if self.pp_handler is not None:
+            # Deferred to below propose(): the drafts for the NEXT step do not
+            # exist yet here, and the payloads are all materialised by sample()
+            # and not mutated afterwards, so moving the send is safe.
+            _pp_relay = (sampler_output.sampled_token_ids, num_sampled, num_rejected)""",
+        "V5 defer the relay",
+    )
+    ok &= patch(
+        runner,
+        """        if self.num_speculative_steps > 0:
+            # Spec-decode and diffusion LLMs both use draft tokens but the latter does
+            # not have a speculator (i.e. self.speculator is None)
+            self.draft_tokens_handler.set_draft_tokens(""",
+        """        if _pp_relay is not None:
+            assert self.pp_handler is not None
+            self.pp_handler.broadcast(
+                _pp_relay[0],
+                _pp_relay[1],
+                _pp_relay[2],
+                input_batch,
+                self.req_states.draft_tokens[input_batch.idx_mapping]
+                if self.pp_handler.relay_drafts
+                else None,
+            )
+
+        if self.num_speculative_steps > 0:
+            # Spec-decode and diffusion LLMs both use draft tokens but the latter does
+            # not have a speculator (i.e. self.speculator is None)
+            self.draft_tokens_handler.set_draft_tokens(""",
+        "V5b send it below propose",
     )
 
-    # ---- R9: stop the relay ending a few steps early.
-    #
-    # Measured after R1-R8: the ids agree on the first decode steps and then the
-    # non-last rank's `last_sampled_tokens` FREEZES while the last rank moves on.
-    # That is the second defect described on vllm#50514: the scheduler advances
-    # `num_computed_tokens` by the full scheduled width up front and rolls the
-    # rejected part back only in `update_from_output`, which under PP lands after
-    # the next batch is scheduled. `compute_need_sampled_mask` reads the inflated
-    # count, decides the request is finishing up to `num_speculative_tokens`
-    # early, returns None - and both the send and the recv are skipped from then
-    # on.
-    #
-    # Widening the finish test by the speculative depth can only DELAY calling a
-    # request finished, never advance it, so it cannot cause a missing broadcast.
-    # At worst one extra relay for a request that really has finished, whose slot
-    # the existing `freed` / `need_sampled_mask` filtering in
-    # `get_prev_sampled_outputs` already discards. Both sides call the same
-    # function with the same argument, so the decision stays symmetric.
+    # ---- V6: the finish test reads an inflated num_computed_tokens under PP and
+    # ends the relay a few steps early; widening it by the speculative depth can
+    # only delay calling a request finished, never advance it.
     ok &= patch(
         pp,
         """def compute_need_sampled_mask(input_batch: InputBatch) -> np.ndarray | None:""",
         """def compute_need_sampled_mask(
     input_batch: InputBatch, spec_slack: int = 0
 ) -> np.ndarray | None:""",
-        "R9a widen the finish test",
+        "V6 finish-test signature",
     )
     ok &= patch(
         pp,
@@ -228,7 +285,7 @@ def main() -> int:
         """    not_finishing = (
         np.maximum(old_computed, prefill_len) + 1 < max_seq_len + spec_slack
     )""",
-        "R9b apply the slack",
+        "V6b apply slack",
     )
     ok &= patch(
         pp,
@@ -238,13 +295,13 @@ def main() -> int:
             input_batch, self.num_speculative_steps
         )
         if need_sampled_mask is None:""",
-        "R9c receiver passes the slack",
+        "V6c receiver slack",
     )
     ok &= patch(
         pp,
         """        if compute_need_sampled_mask(input_batch) is None:""",
         """        if compute_need_sampled_mask(input_batch, self.num_speculative_steps) is None:""",
-        "R9d sender passes the slack",
+        "V6d sender slack",
     )
 
     print("SPECDEC_PP_RELAY_DONE" if ok else "SPECDEC_PP_RELAY_INCOMPLETE")
