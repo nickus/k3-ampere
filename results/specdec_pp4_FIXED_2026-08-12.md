@@ -117,6 +117,21 @@ PP=4  shape=(11, 4096) sum=6.4611821672e-09 weighted=2.2653207910e-05 absmax=7.7
   verification logits the rejection sampler sees at PP=1 and PP=2 for that
   step — not to guess at the bookkeeping.
 
+  **Done, and it moves the defect downstream of sampling.** A probe on the last
+  rank printed, for every `sample()` call, `num_draft_tokens`, the target's
+  argmax per verified position, the draft's argmax, `num_sampled` and
+  `num_rejected`. Diffing a PP=1 run against a PP=2 run: **24 lines each, zero
+  differences.** In the same instrumented build the texts still differ
+  (`PP=1 spec vs PP=2 spec: DIFFER`).
+
+  So the sampler reaches identical decisions at both PP degrees, and the
+  sequences still come out different. The defect is therefore *not* in drafting
+  and *not* in verification — it is in what the PP path does with the sampled
+  tokens afterwards: `postprocess_sampled` / `update_requests` / the
+  `PPHandler` FIFO that hands "previous sampled outputs" back `pp_size` steps
+  later. The symptom fits: PP=2 repeats the previous token instead of advancing
+  the two-token cycle, i.e. one token too many is committed.
+
 - ~~Greedy text parity PP=1 vs PP=4 is not established.~~ The two outputs agree
   for most of the sequence and diverge in the tail. With random dummy draft
   weights and a degenerate repetitive completion, a chance draft acceptance
