@@ -495,3 +495,47 @@ it breaks the PP broadcast; workaround `--no-async-scheduling`. Tested on our
 setup: it changes behaviour — the A9 broadcast that previously deadlocked now
 completes — but greedy parity is still broken at k=1,2,3. So it is a necessary
 setting for anyone doing this, and not sufficient here.
+
+## The relay works — defect 1 is fixed, defect 2 is next
+
+`tools/specdec_pp_relay.py` (R1-R8) carries draft tokens on the deferred slot the
+PP handler already uses. Measured effect on the ids the first rank embeds:
+
+```
+before:  first=True  ids=[86072, 0, 0, 0]
+after:   first=True  ids=[86072, 86072, 86072, 86072]
+         first=False ids=[86072, 86072, 86072, 86072]   <- ranks agree
+         first=True  ids=[100889, 100889, 100889, 100889]
+         first=False ids=[100889, 100889, 100889, 100889] <- agree
+         first=True  ids=[100889, ...]
+         first=False ids=[124005, ...]                    <- diverge
+```
+
+So the values arrive, the ranks agree for the first decode steps, and then the
+first rank's ids **freeze** while the last rank moves on. Greedy parity is still
+DIFFER at k=1 and k=3.
+
+That freeze is upstream's **second** defect, quoted from
+[#50514](https://github.com/vllm-project/vllm/pull/50514):
+
+> `compute_need_sampled_mask` ended the broadcast early. The scheduler advances
+> `num_computed_tokens` by the full scheduled width up front and rolls the
+> rejected part back in `update_from_output`, which under PP lands *after* the
+> next batch is scheduled. Reading the inflated count marked requests as
+> finishing up to `num_speculative_tokens` early, after which the last rank
+> stopped broadcasting and the other ranks' `last_sampled_tokens` froze.
+
+A frozen `last_sampled_tokens` on the non-last rank is exactly what the trace
+shows. So the remaining work is that second fix, not more searching.
+
+**Where we are relative to upstream.** #50514 (yongqinwang-cmd, 2026-07-31, open,
+21 comments, unmerged) implements both fixes and is validated on 2x8 B200 with
+Kimi-K3 MXFP4 + DSpark: accept length 5.42, needle 3/3 at 1,029,433 tokens. Its
+diff does **not** apply to current nightly (3/6 and 2/8 hunks fail), which is why
+we carry our own equivalent of fix 1 written against today's tree.
+
+We are not first. What is genuinely missing from that PR, and what this rig can
+supply, is **validation on Ampere / consumer hardware** — every published run is
+B200, H200 or GB10. One published datapoint even suggests our forced backend
+helps: a practitioner reports acceptance *dropping* when moving the draft off
+`TRITON_MLA`, and `TRITON_MLA` is the only MLA decode backend sm_86 has.
