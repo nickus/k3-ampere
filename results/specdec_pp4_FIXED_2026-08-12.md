@@ -301,3 +301,44 @@ pipeline parallelism should hit the same broadcast.
 Not filed yet: it was measured on DSpark+PP, which upstream forbids without our
 patches. Filing needs one reproduction on a supported combination (MTP + PP),
 which needs a model with an MTP head — K3 ships `num_nextn_predict_layers = 0`.
+
+## The first rank: root cause found, fix incomplete
+
+**Measured, and it ends the search for where.** The token ids each rank feeds to
+the model, decode step, PP=2, k=3:
+
+```
+PP=1              ids=[86072, 86072, 86072, 86072]
+PP=2  first rank  ids=[86072,     0,     0,     0]
+PP=2  last rank   ids=[86072, 86072, 86072, 86072]
+```
+
+The first rank embeds **token id 0** for every speculative position. The constant
+`2.03515` seen in every earlier fingerprint is simply `embedding(0)`. Layer 0's
+output already differs, so nothing before the embedding is involved.
+
+Mechanism, read from the source:
+
+- the draft token **values** live in `req_states.draft_tokens`
+  (`gpu/states.py:73`, created as zeros);
+- the only writer is `self.req_states.draft_tokens[...] = draft_tokens`
+  immediately after `speculator.propose(...)` (`gpu/model_runner.py:1650`), and
+  the speculator exists only on the last PP rank;
+- the runner reads `scheduler_output.scheduled_spec_decode_tokens` for **counts**
+  only (`model_runner.py:997`) and takes the **values** from that local buffer,
+  which every other rank leaves at zero;
+- `DraftTokensHandler` (`spec_decode/utils.py`) does not distribute anything
+  across ranks — it copies the drafts to numpy for the engine's own output.
+
+At PP=1 this is invisible: one process both writes and reads the buffer.
+
+**Patch A8** fills `req_states.draft_tokens` from the scheduler dict on ranks
+that do not run the drafter. It is mechanically effective — the first rank's ids
+change from `0` to `-1` — but that is **not a fix**: `-1` is the "no token"
+filler, so the dict the engine broadcasts does not carry real draft values
+either. Greedy parity is still broken at k=1,2,3.
+
+So the remaining question is one hop further back: what the last rank actually
+returns to the engine as `DraftTokenIds`, and why the engine's next
+`scheduled_spec_decode_tokens` is all `-1`. A8 stays in the patch set because it
+is necessary but demonstrably not sufficient.
