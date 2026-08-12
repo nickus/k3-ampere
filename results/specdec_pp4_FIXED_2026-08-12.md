@@ -152,9 +152,32 @@ PP=4  shape=(11, 4096) sum=6.4611821672e-09 weighted=2.2653207910e-05 absmax=7.7
   Same class of defect as A7, one transfer over: a count mismatch in the
   pipeline hand-off, silent because the buffer is large enough.
 
-  Still open: whether it also fires when the model stops on EOS rather than the
-  token limit; and whether the short send is ours (B1/B2/B4 touch
-  IntermediateTensors) or upstream's hidden_states/residual path.
+  **Narrowed to the transfer itself.** Fingerprinting on the receiving rank at
+  the point of arrival — before it runs a single layer of its own:
+
+  ```
+  arrived: [2.075268, 2.035151, 2.035151, 2.035151]
+           [2.046728, 2.035151, 2.035151, 2.035151]
+           [2.057472, 2.035151, 2.035151, 2.035151]
+  ```
+
+  Row 0 changes from step to step (live data); rows 1..k hold **one constant
+  across every step**. The corruption is already there on arrival, so it is not
+  the receiving rank's forward — the inter-stage hand-off moves **only the first
+  row** and leaves the rest as previous buffer contents. A probe on the sending
+  side shows it holding the full 4 rows, so the data exists before the transfer.
+
+  Sequence of the whole defect, all measured:
+  1. inter-stage transfer delivers row 0 only; rows 1..k stay stale;
+  2. the last rank computes speculative logits from those stale rows, giving the
+     same wrong token at every speculative position;
+  3. drafts are therefore verified against garbage and acceptance is random;
+  4. on a step where a draft is accepted, that wrong token enters the output.
+
+  Still open: the exact line that sizes the transfer (upstream's
+  hidden_states/residual path — our B1/B2/B4 only add aux tap entries to the
+  dict, they do not resize hidden_states), and whether it fires on EOS-terminated
+  generation as well as token-limit truncation.
 
 - ~~Greedy text parity is BROKEN at every PP>=2~~ (superseded by the rows above) Four comparisons, same prompt, `temperature=0`:
 
