@@ -962,3 +962,52 @@ So there are two defects, not one:
 The second is the same class as the original draft-token defect and is why the
 PP=2 dummy-stand proof looked clean earlier: at 4 layers there are too few steps
 in flight for the value to be missing.
+
+## Defect #2, measured to the value: the step runs on state that has not arrived
+
+A probe at `combine_sampled_and_draft_tokens`, where the step's input ids are
+built, PP=2 on the stand with fix #1 applied:
+
+```
+[ANCHOR] pid=79079 last_sampled=[16925]   drafts=[16925, 16925, 16925]
+[ANCHOR] pid=79080 last_sampled=[124005]  drafts=[124005, 124005, 124005]
+[ANCHOR] pid=79080 last_sampled=[0]       drafts=[0, 0, 0]
+[ANCHOR] pid=79079 last_sampled=[0]       drafts=[0, 0, 0]
+```
+
+On some steps the anchor AND the drafts are zero, on both ranks at once. That is
+not a relay that delivered the wrong value - it is a step executing before the
+relay delivered anything, on a request whose state is still empty. The model then
+embeds token id 0, which is `!`, which is what shows up in the output and what
+made greedy parity fail.
+
+Ruled out, by experiment rather than argument: our own V6 slack. Setting it back
+to 0 changes nothing - the same two texts diverge the same way. The gate that is
+supposed to stop this, `need_sampled_mask`, is upstream's.
+
+### Where this leaves speculative decoding under PP
+
+Two defects, both now measured rather than inferred:
+
+| # | defect | status |
+|---|---|---|
+| 1 | a spec step can be scheduled with no anchor SLOT (`qlen=k`, `num_logits=k+1`, `logits_start=-1`) | fixed and verified: zero negative indices, zero asserts |
+| 2 | a spec step can execute before the anchor VALUE has arrived, embedding token 0 | open, upstream, in the `need_sampled_mask` gate |
+
+Both need PP to appear, both get more likely with model depth, and neither is
+visible on the 4-layer stand that the earlier PP=2 proof used - which is exactly
+why that proof did not generalise, and why I am not repeating the claim.
+
+### The harness, for whoever picks this up
+
+```
+STAND_LAYERS=16 python gen_slice_hf.py     # ~1 min, 2 GPUs, no download
+python gen_dspark_draft.py
+python hidden_rows_probe.py                # qlen vs num_logits at the gather
+python anchor_value_probe.py               # last_sampled / drafts at input build
+PPS='1 2' bash verify_pp_compare.sh        # PP=1 control vs PP=2, text + traces
+```
+
+PP=1 is the reference and it is clean: 24 spec steps, every one
+`qlen=4 num_logits=4 ndraft=3`, zero negative indices. Any fix has to make PP=2
+match that AND reproduce PP=1's text exactly.
