@@ -434,3 +434,27 @@ Options, none of them a one-line patch, and none yet measured:
 
 This is the first finding in this campaign that is a design question rather than
 a defect, so it is recorded as one rather than patched over.
+
+### A9: the naive broadcast deadlocks — the dependency is real, measured
+
+A9 replaced A8 with the obvious fix: broadcast `req_states.draft_tokens` from the
+last PP rank at the top of the step, before `combine_sampled_and_draft_tokens`
+reads it. The last rank's buffer does hold the right values at that moment, so
+the data is there.
+
+Result: the server boots, and the first request **never returns** — empty
+response, no forward executed after it, no error in the log (NCCL's watchdog did
+not reach its 600s deadline inside the window). No stack was captured for this
+run, so "deadlock" is the reading most consistent with the evidence rather than a
+dumped call stack.
+
+It is the predicted shape: rank 0 blocks in the broadcast waiting for the last
+rank, while the last rank is still finishing the previous microbatch and waiting
+on rank 0's hidden states. The draft values have to move **against** the
+pipeline's direction, and a collective placed in the flow cannot do that.
+
+So the backward dependency is no longer an argument — it is measured. Options 1-4
+above stand, and option 1 ("stall the pipeline") specifically means an explicit
+sequencing change, not a broadcast dropped into the existing step.
+
+Both A8 and A9 are dead ends and are recorded as such. Neither is kept.

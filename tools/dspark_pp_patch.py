@@ -447,41 +447,14 @@ def main(sp: str) -> None:
         "A7 pad sampled_token_ids to the width receivers allocate",
     )
 
-    # ---- A8: non-last PP ranks embed token id 0 for every speculative position.
-    #
-    # Measured, PP=2, k=3, same prompt (ids fed to the model, first 4 of the
-    # decode block):
-    #   PP=1            ids=[86072, 86072, 86072, 86072]
-    #   PP=2 rank 0     ids=[86072,     0,     0,     0]
-    #   PP=2 last rank  ids=[86072, 86072, 86072, 86072]
-    #
-    # The draft token VALUES live in `req_states.draft_tokens`, and the only
-    # writer is `self.req_states.draft_tokens[...] = draft_tokens` right after
-    # `speculator.propose(...)` - which runs on the last rank only. Every other
-    # rank reads a buffer that nothing ever filled, so the speculative rows of
-    # its stage output are computed from embedding(0). At PP=1 this is invisible
-    # because the same process both writes and reads it.
-    #
-    # `scheduler_output.scheduled_spec_decode_tokens` already carries the values
-    # to every worker - the runner just uses it for COUNTS and takes the values
-    # from local state. So fill the buffer from it on the ranks that do not
-    # propose. No-op at PP=1 and on the last rank.
-    patch(
-        runner,
-        """        draft_tokens = scheduler_output.scheduled_spec_decode_tokens
-        num_draft_tokens_per_req = None""",
-        """        draft_tokens = scheduler_output.scheduled_spec_decode_tokens
-        if draft_tokens and not self.is_last_pp_rank:
-            _dt = self.req_states.draft_tokens
-            for _i, _rid in enumerate(req_ids):
-                _t = draft_tokens.get(_rid)
-                if _t:
-                    _dt[idx_mapping_np[_i], : len(_t)] = torch.as_tensor(
-                        _t, dtype=_dt.dtype, device=_dt.device
-                    )
-        num_draft_tokens_per_req = None""",
-        "A8 fill draft tokens on ranks that do not run the drafter",
-    )
+    # A8 and A9 lived here and are both removed. A8 rehydrated draft ids from
+    # `scheduler_output.scheduled_spec_decode_tokens`, which by design carries
+    # only counts (`DraftTokensHandler` returns `[-1] * k` unless structured
+    # outputs need grammar validation). A9 broadcast the values from the last
+    # rank at the top of the step, and deadlocked: the values have to travel
+    # backwards against the pipeline, and a collective in the flow cannot do it.
+    # See results/specdec_pp4_FIXED_2026-08-12.md - this needs a sequencing
+    # change, not a patch.
 
     print("DSPARK_PP_PATCHES_DONE")
 
