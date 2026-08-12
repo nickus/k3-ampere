@@ -20,7 +20,7 @@ MODEL=${MODEL:-/workspace/models/k3-slice}
 DRAFT=${DRAFT:-/workspace/models/k3-dspark-rh}
 PORT=18400
 PP=${PP:-8}
-K=${K:-3}
+K=${K:-1}
 OUT=/workspace/k3/bench
 mkdir -p "$OUT"
 
@@ -32,17 +32,19 @@ export VLLM_USE_FLASHINFER_SAMPLER=0
 #   stage 0    : L*1.52 + 2.35 (embedding)
 #   stages 1-6 : L*1.52
 #   stage 7    : L*1.52 + 2.35 (lm_head) + 4.73 (draft)
-# Holding every stage under ~20 GB of the 23.56 GB card, so ~3.5 GB is left for
-# KV, gives 8 layers on the last stage and 11 on the first. A first attempt at 9
-# on the last stage came within ~600 MB and still OOMed.
-export VLLM_PP_LAYER_PARTITION=${VLLM_PP_LAYER_PARTITION:-11,12,12,12,12,13,13,8}
+# Two attempts (9 then 8 layers on the last stage) still OOMed, and the second
+# gave the missing number: 23.01 GB in use with only 8 layers, i.e. the draft
+# costs ~9.7 GB resident, not the 4.73 GB of its checkpoint - it carries its own
+# 163840-row embedding and lm_head on top of the file. Re-solving with that:
+#   stage 7 <= 22 GB  =>  L*1.52 + 2.35 + 9.7 + 1 <= 22  =>  L <= 5
+export VLLM_PP_LAYER_PARTITION=${VLLM_PP_LAYER_PARTITION:-11,13,13,13,13,13,12,5}
 
 serve() {  # serve <spec yes|no>
   pkill -9 -f "[a]pi_server" 2>/dev/null; pkill -9 -f "[V]LLM::" 2>/dev/null; sleep 8
   local args=(--model "$MODEL" --served-model-name k3 --trust-remote-code
     --pipeline-parallel-size "$PP" --tensor-parallel-size 1
-    --max-model-len 2048 --no-async-scheduling --max-num-seqs 4
-    --gpu-memory-utilization 0.97 --enforce-eager --port $PORT)
+    --max-model-len 512 --no-async-scheduling --max-num-seqs 1
+    --gpu-memory-utilization 0.98 --enforce-eager --port $PORT)
   [ "$1" = yes ] && args+=(--speculative-config \
     "{\"method\":\"dspark\",\"model\":\"$DRAFT\",\"num_speculative_tokens\":$K}")
   nohup /venv/nm/bin/python -m vllm.entrypoints.openai.api_server "${args[@]}" \

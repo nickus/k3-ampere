@@ -677,3 +677,104 @@ Lesson, recorded because it will recur: **a special case that makes our own
 configuration work is a reason to ask what general defect it is hiding.**
 Nothing here was Kimi-specific; we just never tried a second method.
 
+
+---
+
+# Real weights, PP=8: the PP=2 result did NOT generalize. Retracting the implied claim.
+
+The relay was proven at PP=2 on a 4-layer dummy-weight stand, by byte-identical
+verification traces. I took that as the mechanism being fixed. On real weights at
+PP=8 it is not.
+
+## The stand
+
+A Kimi-K3 built from 24 of REAP-448's 448 experts: 141.3 GB, all 93 layers, KDA
+linear attention, MLA, MXFP4 intact, real tiktoken tokenizer, and the real
+`RedHatAI/Kimi-K3-speculator.dspark` draft. Fits 8x3090 with a hand-balanced
+pipeline (`VLLM_PP_LAYER_PARTITION=11,13,13,13,13,13,12,5` - the last stage
+carries the draft, measured at ~9.7 GB resident, so it gets 5 layers).
+
+Kept 24 rather than 16 deliberately: at 16, top-16 routing selects every expert
+and the MoE degenerates into a dense sum, so nothing is being routed.
+
+## Baseline: it serves, and it is coherent-shaped garbage
+
+```
+k3-slice PP=8 spec=off:  TPOT 243.0 ms  =  4.12 tok/s/req,  TTFT 0.35 s
+```
+
+Generation, greedy:
+
+```
+' The Python function is a Python function that merges two sorted lists.
+  The Python function is a Python function that merges two sorted lists. ...'
+```
+
+Degenerate, exactly as predicted for 24-of-448 experts - and printed BEFORE any
+rate, because on a slice like this a high acceptance number is the least
+trustworthy outcome available.
+
+## Speculative decode on: the output is corrupted
+
+```
+' The \n Python+ PythonPython PythonPython Python PythonPython Python ...'
+' Explain! same a time race! condition a!! is!!!!!!!!!!!!!!!!!!!!!!!!!!!'
+```
+
+vLLM reported `mean acceptance length = 1.44`, i.e. drafts were accepted.
+
+The tokenizer settles what those are:
+
+```python
+>>> t.decode([0]) -> '!'
+```
+
+Token id 0 is `!`. A run of `!` in the output is `embedding(0)` - the signature
+of draft tokens arriving as zeros, which is precisely the defect the relay was
+written to fix and precisely what it fixed at PP=2. Greedy output differs between
+spec-on and spec-off, so speculative decoding is not lossless here: it is
+accepting garbage, and the acceptance figure of 1.44 is counting that garbage.
+
+**So: fixed at PP=2 on a dummy stand, still broken at PP=8 on real weights.** I
+am not able to claim from this session that speculative decoding works under
+pipeline parallelism on real weights. The honest status is that the PP=2 proof
+was necessary and not sufficient, and that the deferred-slot lag scaling with
+pp_size is the obvious suspect - at PP=8 the payload is consumed eight steps
+later, not two.
+
+## The other spec path fails too, differently
+
+GLM-4.5-Air + `method=mtp` at PP=4 never even reaches the relay: it dies in
+`create_engine_config` on a `SupportsPP` check that no MTP head satisfies
+(fixed here, generally), then in an unmasked Triton store in
+`_prepare_prefill_inputs_kernel` (guard written, deliberately not applied), then
+in `sample()` on `hidden_states[input_batch.logits_indices]` with
+
+```
+Assertion `ind >=0 && ind < ind_dim_size && "vectorized gather kernel index out
+of bounds"` failed
+```
+
+K3+DSpark at PP=8 hits that SAME assertion at k=3 before the corruption above
+appears at k=1. Two unrelated proposers, two model families, one class of
+failure: indices derived from the scheduled step layout are out of range on the
+drafting rank. That is now the thing to chase, and it is upstream of our patches
+- verified by reproducing the MTP case with `relay_drafts=False`.
+
+## Measured, and not in dispute
+
+```
+GLM-4.5-Air AWQ, PP=4, spec off, 8x3090, enforce-eager
+  concurrency 1:  TPOT 94.60 ms   10.57 tok/s/req    10.6 tok/s total
+  concurrency 4:  TPOT 92.68 ms   10.79 tok/s/req    43.2 tok/s total
+  concurrency 8:  TPOT 93.99 ms   10.64 tok/s/req    85.1 tok/s total
+  repeat stability: 94.60 vs 94.70 ms  (0.1%)
+```
+
+Per-request decode is flat while aggregate scales ~8x, which says the pipeline at
+batch 1 is mostly idle. That is the number that makes a batch-1 speculative
+speedup claim indefensible on its own, and it is why the harness now sweeps
+concurrency.
+
+TTFT above is a prefix-cache hit, NOT prefill. There is no honest prefill number
+in this session; it needs unique prompts or caching disabled.
