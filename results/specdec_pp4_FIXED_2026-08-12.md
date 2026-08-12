@@ -605,3 +605,75 @@ token ids, not the boilerplate that fooled an earlier run.
 is the measurement that matters — acceptance rate and throughput on real weights,
 at PP=1 / 2 / 4, which is both the number we owe and the evidence #50514 says it
 needs to lift its own `pp <= 2` cap.
+
+---
+
+# A second, larger defect: MTP cannot run under PP **at all**, and it fails before any weight loads
+
+Moving to real weights immediately produced a failure that had nothing to do with
+the relay. GLM-4.5-Air AWQ, `--speculative-config '{"method":"mtp",...}'`, PP=4:
+
+```
+NotImplementedError: Pipeline parallelism is not supported for this model.
+Supported models implement the `SupportsPP` interface.
+  vllm/config/speculative.py:_verify_args
+    -> draft_model_config.verify_with_parallel_config(_dpc)
+  vllm/config/model.py:verify_with_parallel_config
+```
+
+This is a **config-time** rejection inside `create_engine_config`. Nothing is
+loaded, no GPU is touched, no relay is reached. The whole `spec=yes` half of the
+first benchmark matrix wrote zero rows because of it, which is how it was found:
+`bench.jsonl` jumped from `pp4_specno_r5` straight to `pp8_specno_warmup`.
+
+## Why the check is wrong for a draft model
+
+`create_draft_parallel_config` copies the target's `pipeline_parallel_size` into
+the draft's parallel config. Verification then demands the draft implement
+`SupportsPP`. But in the V2 runner the drafter is built here:
+
+```python
+if self.speculative_config is not None:
+    if self.is_last_pp_rank:
+        self.speculator = init_speculator(self.vllm_config, self.device)
+```
+
+`is_last_pp_rank` — the draft is instantiated on exactly one rank and is never
+split across stages. So the question "can this model be pipeline-sharded?" is one
+nobody needs answered about a draft. Asking it anyway rejects a configuration
+that would have worked.
+
+## Scope: this is not a Kimi problem
+
+Read the class definitions: `Glm4MoeMTP` and `DeepSeekMTP` are
+`(nn.Module, <...>MixtureOfExperts)` — neither inherits `SupportsPP`. Neither do
+the other entries of `MTPModelTypes`, which currently lists ~20 heads
+(`deepseek_mtp`, `glm4_moe_mtp`, `ernie_mtp`, `qwen3_next_mtp`, `minimax_m3_mtp`,
+`kimi_k3_mtp`, …). **Every one of them is blocked under PP>1 by this check.**
+
+Searched the vLLM tracker before claiming novelty (`gh search issues`, four
+phrasings): the only related open item is #50098, DSpark-specific. The general
+MTP case appears unreported.
+
+## The fix, and the self-correction it forced
+
+Our own earlier patch had already relaxed this — but gated on
+`method == "dspark"`, which turned a general defect into a local workaround and
+hid it from us for a week. The gate is now unconditional, with only the
+verification relaxed and the config restored in `finally`, so rank and
+world-size bookkeeping downstream is untouched:
+
+```python
+if _dpc.pipeline_parallel_size > 1:
+    _pp = _dpc.pipeline_parallel_size
+    object.__setattr__(_dpc, "pipeline_parallel_size", 1)
+    try:
+        self.draft_model_config.verify_with_parallel_config(_dpc)
+    finally:
+        object.__setattr__(_dpc, "pipeline_parallel_size", _pp)
+```
+
+Lesson, recorded because it will recur: **a special case that makes our own
+configuration work is a reason to ask what general defect it is hiding.**
+Nothing here was Kimi-specific; we just never tried a second method.
+
