@@ -903,3 +903,19 @@ and `!` (token 0) filling the output on real K3 weights - follows from it.
 
 Nothing here involves our patches: the last PP rank owns its own draft tokens,
 and the MTP form of this reproduces with `relay_drafts=False`.
+
+## The PP=1 control
+
+Same stand, same prompt, same probe, one pipeline stage:
+
+```
+PP=1:  24 spec steps, every one   qlen=[4]  num_logits=[4]  ndraft=3
+       steps with a negative logits index: 0
+
+PP=2:  qlen=[3] num_logits=[4] ndraft=3   ->  idx=[-1, 0, 1, 2]  ->  assert
+```
+
+The invariant "a spec step carries its anchor token" holds without exception at
+PP=1 and is violated under pipeline parallelism. That is the control that makes
+this an upstream report rather than a suspicion, and it doubles as the regression
+test: 24 clean steps at PP=1, and the same must hold at PP=2 once fixed.
