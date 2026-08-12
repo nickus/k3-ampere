@@ -65,78 +65,138 @@ def main() -> int:
     runner = sp / "v1" / "worker" / "gpu" / "model_runner.py"
     ok = True
 
-    # R1: carry a draft-token buffer on the pending-recv slot.
-    ok &= patch(
-        pp,
-        "    sampled_tokens: torch.Tensor  # [num_reqs, max_sample_len]",
-        "    sampled_tokens: torch.Tensor  # [num_reqs, max_sample_len]\n"
-        "    draft_tokens: torch.Tensor | None = None  # [num_reqs, num_spec_steps]",
-        "R1 slot carries drafts",
-    )
-
-    # R2: receivers post the third broadcast and keep the buffer.
-    ok &= patch(
-        pp,
-        """            combined = torch.empty(2, num_reqs, dtype=torch.int32, device=self.device)
-            torch.distributed.broadcast(
-                sampled_tokens, src=self.last_rank, group=self.broadcast_group
-            )""",
-        """            combined = torch.empty(2, num_reqs, dtype=torch.int32, device=self.device)
-            # Third payload: the draft tokens for these requests' NEXT step. The
-            # last rank issues the matching send after propose(); NCCL matches by
-            # order on the group, so issuing it later there is fine.
-            self._pending_drafts = torch.empty(
-                num_reqs,
-                max(1, self.num_speculative_steps),
-                dtype=torch.int64,
-                device=self.device,
-            )
-            torch.distributed.broadcast(
-                sampled_tokens, src=self.last_rank, group=self.broadcast_group
-            )""",
-        "R2 receiver allocates the draft buffer",
-    )
-
-    # R3: remember how many speculative steps there are (used by R2).
+    # R3: remember the spec depth and the pending buffer.
     ok &= patch(
         pp,
         "        self.max_sample_len = num_speculative_steps + 1",
         "        self.max_sample_len = num_speculative_steps + 1\n"
         "        self.num_speculative_steps = num_speculative_steps\n"
         "        self._pending_drafts: torch.Tensor | None = None",
-        "R3 remember the spec depth",
+        "R3 remember spec depth",
     )
 
-    # R4: the sender's half, issued after propose().
+    # R1: carry the drafts on the slot. MUST go last in the dataclass - a field
+    # with a default before the non-default ones does not even construct.
+    ok &= patch(
+        pp,
+        "    gen_at_receive_np: np.ndarray  # [num_reqs]",
+        "    gen_at_receive_np: np.ndarray  # [num_reqs]\n"
+        "    # Drafts for these requests' NEXT step, relayed from the last rank.\n"
+        "    draft_tokens: torch.Tensor | None = None",
+        "R1 slot carries drafts",
+    )
+
+    # R2: receiver posts the third broadcast, matching the sender's later send.
+    ok &= patch(
+        pp,
+        """            combined = torch.empty(2, num_reqs, dtype=torch.int32, device=self.device)""",
+        """            combined = torch.empty(2, num_reqs, dtype=torch.int32, device=self.device)
+            self._pending_drafts = torch.empty(
+                num_reqs,
+                max(1, self.num_speculative_steps),
+                dtype=torch.int64,
+                device=self.device,
+            )""",
+        "R2 receiver allocates the draft buffer",
+    )
+
+    # R2b: the receive itself, after the two existing ones so the order on the
+    # group matches the sender.
+    ok &= patch(
+        pp,
+        """            event = self.broadcast_stream.record_event()
+            num_sampled, num_rejected = combined.unbind(dim=0)""",
+        """            if self.num_speculative_steps > 0:
+                torch.distributed.broadcast(
+                    self._pending_drafts,
+                    src=self.last_rank,
+                    group=self.broadcast_group,
+                )
+                self._pending_drafts.record_stream(self.main_stream)
+            event = self.broadcast_stream.record_event()
+            num_sampled, num_rejected = combined.unbind(dim=0)""",
+        "R2b receiver third broadcast",
+    )
+
+    # R5: stash it on the slot (positional - it is the last field).
+    ok &= patch(
+        pp,
+        """            need_sampled_mask,
+            gen_at_receive_np,
+        )
+        return bool(need_sampled_mask.all())""",
+        """            need_sampled_mask,
+            gen_at_receive_np,
+            self._pending_drafts,
+        )
+        return bool(need_sampled_mask.all())""",
+        "R5 stash drafts on the slot",
+    )
+
+    # R6: hand them back with the sampled tokens, on the same lag.
+    ok &= patch(
+        pp,
+        """            num_rejected=slot.num_rejected,
+            idx_mapping=idx_mapping,
+        )""",
+        """            num_rejected=slot.num_rejected,
+            idx_mapping=idx_mapping,
+            draft_tokens=slot.draft_tokens,
+        )""",
+        "R6 return drafts from the FIFO",
+    )
+
+    # R4: the sender half, issued after propose().
     ok &= patch(
         pp,
         "    def get_prev_sampled_outputs(self)",
         '''    def broadcast_drafts(self, draft_tokens: torch.Tensor) -> None:
-        """Send the freshly proposed drafts on the same relay, after propose()."""
+        """Send freshly proposed drafts on the same relay, after propose()."""
         assert self.is_last_rank
         with torch.cuda.stream(self.broadcast_stream):
+            self.broadcast_stream.wait_stream(self.main_stream)
+            _d = draft_tokens.contiguous()
             torch.distributed.broadcast(
-                draft_tokens.contiguous(),
-                src=self.last_rank,
-                group=self.broadcast_group,
+                _d, src=self.last_rank, group=self.broadcast_group
             )
-            draft_tokens.record_stream(self.broadcast_stream)
+            _d.record_stream(self.broadcast_stream)
 
     def get_prev_sampled_outputs(self)''',
-        "R4 sender half after propose",
+        "R4 sender half",
     )
 
-    # NOT FINISHED. R1-R4 are the transport half. Still to write, each needing an
-    # exact anchor from the installed tree:
-    #   R5  stash `self._pending_drafts` into the PendingRecv slot in `receive()`
-    #   R6  return it from `get_prev_sampled_outputs()` alongside sampled_tokens
-    #   R7  accept it in `postprocess_sampled()` and write
-    #       `self.req_states.draft_tokens[idx_mapping] = draft_tokens`
-    #   R8  call `pp_handler.broadcast_drafts(draft_tokens)` on the last rank
-    #       immediately after `req_states.draft_tokens[...] = draft_tokens`
-    # Applying R1-R4 alone changes nothing and is safe, but it is not the fix.
-    print("SPECDEC_PP_RELAY_TRANSPORT_ONLY" if ok else "SPECDEC_PP_RELAY_INCOMPLETE")
-    print("  R5-R8 (wiring) are NOT implemented yet - see the comment above")
+    # R7: accept and apply them on the receiving ranks.
+    ok &= patch(
+        runner,
+        """        num_rejected: torch.Tensor,
+        query_start_loc: torch.Tensor | None = None,
+    ) -> None:""",
+        """        num_rejected: torch.Tensor,
+        query_start_loc: torch.Tensor | None = None,
+        draft_tokens: torch.Tensor | None = None,
+    ) -> None:
+        if draft_tokens is not None and not self.is_last_pp_rank:
+            # idx_mapping carries -1 for rows filtered since receive; those must
+            # not be written, or they land on the last row of the buffer.
+            _valid = idx_mapping >= 0
+            if bool(_valid.any()):
+                self.req_states.draft_tokens[idx_mapping[_valid]] = draft_tokens[
+                    _valid
+                ]""",
+        "R7 apply drafts on receiving ranks",
+    )
+
+    # R8: send them the moment they exist.
+    ok &= patch(
+        runner,
+        """            self.req_states.draft_tokens[input_batch.idx_mapping] = draft_tokens""",
+        """            self.req_states.draft_tokens[input_batch.idx_mapping] = draft_tokens
+            if self.pp_handler is not None and self.num_speculative_steps > 0:
+                self.pp_handler.broadcast_drafts(draft_tokens)""",
+        "R8 send drafts after propose",
+    )
+
+    print("SPECDEC_PP_RELAY_DONE" if ok else "SPECDEC_PP_RELAY_INCOMPLETE")
     return 0 if ok else 1
 
 
