@@ -15,7 +15,7 @@ Architecture string, layer count, top-k and quantization format are **identical
 to stock `moonshotai/Kimi-K3`**. Only `num_experts` differs. That is the whole
 point: this is not a new format to port, it is the format
 `k3-ampere` already proved runs on sm_86 (Phase B — MXFP4 → Marlin W4A16,
-PIECEWISE CUDA graphs 51/51, PP=2 on 2×3090).
+PIECEWISE CUDA graphs 51/51 — note the graph capture was verified at PP=1, while PP=2 belongs to the adjacent MXFP4→Marlin row of the 2026-07-30 table; this line previously merged the two into a PP=2 graphs claim that was never measured).
 
 ## Why this is better than the W2 route we were planning
 
