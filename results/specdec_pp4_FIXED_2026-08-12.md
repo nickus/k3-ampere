@@ -869,3 +869,37 @@ landing that on rented hardware without a test suite to check it against.
 What is ready: an exact diagnosis, a one-minute reproduction that needs 2 GPUs
 rather than 8, and the evidence that it is upstream (the MTP case reproduces with
 our relay disabled).
+
+## Measured to the bottom: the step is missing its anchor token
+
+Same probe, now printing the query length and the expected logit count together:
+
+```
+healthy:  hs=(4,1024)  idx=[0, 1, 2, 3]   qlen=[4]  num_logits=[4]  ndraft=3
+failing:  hs=(3,1024)  idx=[-1, 0, 1, 2]  qlen=[3]  num_logits=[4]  ndraft=3
+```
+
+Three drafts in both cases. The healthy step carries **four** tokens - the
+previously accepted token followed by the three drafts - and produces four
+logits. The failing step carries **three**: the drafts alone.
+
+That is not a counting quibble. Logits at a token's position predict the NEXT
+token, so draft 1 can only be verified against the logits of the token that
+precedes it. With the anchor absent, the step is unverifiable by construction,
+and no choice of `num_logits` fixes it: clamping to 3 would silently verify
+drafts 2 and 3 against drafts 1 and 2 and drop draft 1's check entirely.
+
+So the defect is on the scheduler side, not in the index arithmetic. Under
+pipeline parallelism the sampled token comes back `pp_size` steps later on the
+deferred relay, and the scheduler commits the next spec step before it arrives -
+scheduling the drafts without the token they hang off. `num_logits` is then
+correct about what spec decode needs, `query_start_loc` is correct about what was
+scheduled, and they cannot both be satisfied.
+
+`logits_start = query_end - num_logits = 3 - 4 = -1` is where that contradiction
+first becomes visible. Everything downstream - the negative gather, the wrapped
+row read, four identical row fingerprints, `target=[16925,16925,16925,16925]`,
+and `!` (token 0) filling the output on real K3 weights - follows from it.
+
+Nothing here involves our patches: the last PP rank owns its own draft tokens,
+and the MTP form of this reproduces with `relay_drafts=False`.

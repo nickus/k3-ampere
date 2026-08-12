@@ -26,6 +26,17 @@ def main() -> int:
     target = Path(vllm.__file__).parent / "v1" / "worker" / "gpu" / "model_runner.py"
     src = target.read_text()
 
+    if "--remove" in sys.argv:
+        if "[HIDDEN]" not in src:
+            print("hidden-rows probe not installed")
+            return 0
+        start = src.index("\n        try:\n            import os as _os")
+        end = src.index('print("[HIDDEN] probe error:", _e, flush=True)')
+        end = src.index("\n", end) + 1
+        target.write_text(src[:start] + "\n" + src[end:])
+        print("hidden-rows probe removed")
+        return 0
+
     if "[HIDDEN]" in src:
         print("hidden-rows probe already installed")
         return 0
@@ -49,10 +60,20 @@ def main() -> int:
                 round(float(sample_hidden_states[_i].float().sum()), 6)
                 for _i in range(min(6, sample_hidden_states.shape[0]))
             ]
+            # query_start_loc says how many token rows the step actually
+            # carries per request; cu_num_logits says how many logits the spec
+            # bookkeeping expects. When those disagree, logits_start goes
+            # negative. Print both, side by side, at the exact fault.
+            _qsl = input_batch.query_start_loc.tolist()[: input_batch.num_reqs + 1]
+            _cnl = input_batch.cu_num_logits.tolist()[: input_batch.num_reqs + 1]
+            _qlen = [_qsl[_i + 1] - _qsl[_i] for _i in range(len(_qsl) - 1)]
+            _nlog = [_cnl[_i + 1] - _cnl[_i] for _i in range(len(_cnl) - 1)]
             print(
                 f"[HIDDEN] pid={_os.getpid()} hs={tuple(hidden_states.shape)} "
                 f"idx={input_batch.logits_indices.flatten().tolist()[:8]} "
-                f"sel={tuple(sample_hidden_states.shape)} rows={_r}",
+                f"sel={tuple(sample_hidden_states.shape)} rows={_r} "
+                f"qlen={_qlen[:6]} num_logits={_nlog[:6]} "
+                f"ndraft={getattr(input_batch, 'num_draft_tokens', None)}",
                 flush=True,
             )
         except Exception as _e:
