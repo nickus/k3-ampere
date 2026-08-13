@@ -289,3 +289,29 @@ graphs (or ~2.7 tok/s if all 48 are saturating the pipeline at once).
 Three cards fewer costs 65 GB of KV — 18 concurrent sequences at 8k. If the rig
 can be brought back to 50 serving cards, that is where the value is: not in the
 per-token latency, which barely notices, but in how many agents fit.
+
+---
+
+## MEASURED 2026-08-13, real K3 slice with graphs: the GLM transfer FAILS
+
+```
+K3 slice, PP=8, concurrency 1:
+  eager  : 172.18 ms   (measured 2026-08-12, two boxes, 0.01% spread)
+  graphs : 170.02 / 170.03 ms     ~1% — nothing
+```
+
+Graph capture DID happen — the log shows `Capturing CUDA graphs`, PIECEWISE and
+FULL_AND_PIECEWISE — and decode did not move. The explanation is architectural:
+in PIECEWISE mode attention runs OUTSIDE the captured graph, and 69 of K3's 93
+layers are KDA linear attention on Triton kernels. On GLM the graph swallowed
+nearly everything (50.3 → 14.7 ms, 3.41×); on K3 it swallowed almost nothing.
+
+**So the 8.7 tok/s per-agent rig figure is retracted.** It assumed GLM's 5.1×
+model-work reduction transfers to K3; measured, it does not. The honest per-agent
+number on 47 cards stands near the eager one: **~3.4 tok/s (spec off), ~5.4 with
+speculation** if K3 keeps its 1.577×.
+
+The lever that remains untried for K3 specifically: forcing full-graph capture of
+the KDA path (`FLA_USE_CUDA_GRAPH=1` was already flagged in GAP_ANALYSIS.md, and
+vLLM's `cudagraph_mode=FULL*` variants) — that is where the GLM-sized win would
+have to come from, if it comes at all.
