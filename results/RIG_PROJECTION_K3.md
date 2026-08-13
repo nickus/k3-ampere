@@ -261,3 +261,31 @@ The last line is the one to distrust most: on GLM speculation stopped paying onc
 graphs were on. K3's draft actually accepts, so it should still pay there — but
 that is exactly the pair of levers this campaign could not measure together on
 K3, because the slice needs ≥160 GB of disk and this box had 80.
+
+---
+
+## The rig is 47 cards, not 50 — redone
+
+Every table above assumed 50. At 47 the latency barely moves (three fewer stages
+is three fewer hops) but the KV budget loses a quarter of its headroom, and that
+is what decides how many agents fit.
+
+```
+карт  GB/card   KV GB    @2k   @8k  @16k     eager     graphs   +spec
+  47     17.8     178     139    48    25   3.4 t/s   8.7 t/s  13.8 t/s
+  50     16.7     243     189    66    35   3.3 t/s   8.3 t/s  13.1 t/s
+```
+
+**47 cards, graphs on: ~115 ms/token, 8.7 tok/s per agent.** Pipeline ceiling
+~410 tok/s aggregate; at the 32% filling efficiency measured on this campaign,
+~130 tok/s across the swarm.
+
+Concurrency is the binding constraint, not speed: **48 simultaneous sequences at
+8k context**, 139 at 2k, 25 at 16k. For a swarm of ~100 coding agents that means
+planning around burst concurrency — at 8k contexts, roughly half the swarm can be
+generating at once before KV runs out, and each of those sees ~8.7 tok/s with
+graphs (or ~2.7 tok/s if all 48 are saturating the pipeline at once).
+
+Three cards fewer costs 65 GB of KV — 18 concurrent sequences at 8k. If the rig
+can be brought back to 50 serving cards, that is where the value is: not in the
+per-token latency, which barely notices, but in how many agents fit.
