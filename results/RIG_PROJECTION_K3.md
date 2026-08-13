@@ -315,3 +315,31 @@ The lever that remains untried for K3 specifically: forcing full-graph capture o
 the KDA path (`FLA_USE_CUDA_GRAPH=1` was already flagged in GAP_ANALYSIS.md, and
 vLLM's `cudagraph_mode=FULL*` variants) — that is where the GLM-sized win would
 have to come from, if it comes at all.
+
+## Session close-out, 2026-08-13
+
+- Graphs+spec on K3 could not be measured: graph capture reserves memory on the
+  last stage, which already hosts the 9.7 GB draft, and KV fell below the 0.54 GiB
+  minimum. Not retried — graphs give ~1% on K3, so the pairing adds little over
+  the known 109 ms spec number.
+- The cadence-fix validation stand died at PP=1 on `0.27.2rc1.dev5` with an
+  engine error unrelated to the fix (the fix was not applied yet at that point);
+  ran out of rented budget before finding the cause. PR B is therefore parked:
+  branch pushed (`fix-pp-spec-cadence`), hunk shared on #52071, validation owed.
+
+**Filed today:** PR #52117 (fixes #52069, validated on three machines), comments
+on #52069 (why #46994 does not cover it) and #52071 (full diagnosis + hunk +
+honest validation status, coordinating with the volunteer contributor).
+
+**The honest 47-card decode picture after everything measured:**
+
+```
+per agent, batch 1  : ~3.4 tok/s eager; graphs add ~1% on K3 (PIECEWISE leaves
+                      the 69 KDA layers outside the graph); ~5.4 tok/s with
+                      DSpark speculation (1.577x, measured on real weights)
+aggregate           : ~60-120 tok/s spec-off; concurrency, not speed, is the
+                      binding constraint (48 sequences at 8k context)
+next real lever     : forcing the KDA path into the graph
+                      (FLA_USE_CUDA_GRAPH=1 / cudagraph_mode=FULL*) - the only
+                      route left to a GLM-sized win, unmeasured
+```
