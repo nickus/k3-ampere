@@ -23,8 +23,10 @@ Three questions matter when you try this:
    NVMe and come back **bit-for-bit identical**. This was the main open risk and
    it is now closed.
 
-The thing that is *not* solved: **speed**. K3 has no working speculative
-decoding on this setup. See below.
+**Speculative decoding now works on this setup** — measured 1.577× decode on
+real weights under 8-stage pipeline parallelism — but it took 13 patches and two
+upstream bugs (both filed, one PR up). What is still open: making CUDA graphs
+help K3 (they do not today), and quality after pruning. See below.
 
 ---
 
@@ -32,10 +34,11 @@ decoding on this setup. See below.
 
 | | Status | Evidence |
 |---|---|---|
-| Kimi-K3 runs on sm_86 (RTX 3090) | ✅ tested on GPUs | Bf16 and MXFP4 both serve at PP=2, CUDA graphs 51/51, 3 Python patches → [`results/2x3090_validation_2026-07-30.md`](results/2x3090_validation_2026-07-30.md) |
+| Kimi-K3 runs on sm_86 (RTX 3090) | ✅ tested on GPUs | Bf16 and MXFP4 both serve at PP=2 (CUDA graph capture verified at PP=1), 3 Python patches → [`results/2x3090_validation_2026-07-30.md`](results/2x3090_validation_2026-07-30.md) |
 | Still works on today's vLLM | ✅ tested on GPUs | **0 patches on `main`, 1 line on release 0.27.0** → [`results/revalidation_vllm_0270_2026-08-11.md`](results/revalidation_vllm_0270_2026-08-11.md) |
 | fp8 KV cache for K3 on Ampere | ✅ we wrote it | 656 bytes/token/layer instead of 1152 → **1.75× more context per card**. Cosine 0.9999967, outputs identical to bf16 → [`fp8kv_k3_port/RESULTS.md`](fp8kv_k3_port/RESULTS.md) |
 | KV cache offload to RAM and NVMe | ✅ tested on GPUs | Hybrid model + pipeline parallel + disk tier, **restored bit-for-bit** (logprob difference 0.00000000) → [`results/kv_offload_PROVEN_2026-08-11.md`](results/kv_offload_PROVEN_2026-08-11.md) |
+| **Speculative decoding under pipeline parallelism** | ✅ tested on GPUs | Real DSpark draft on a real-weight 24-expert K3 slice (141 GB, all 93 layers), PP=8 on 8×3090: **172 → 109 ms/token, 1.577×**, greedy parity 7/8 (the 8th flips from batch shape alone, speculation off) → [`results/specdec_pp4_FIXED_2026-08-12.md`](results/specdec_pp4_FIXED_2026-08-12.md) |
 | 2-bit and 3-bit weights on a 3090 | ✅ tested on GPUs | 2-bit costs no extra time vs 4-bit; a real 3-bit checkpoint serves after repacking, cosine 1.000000 → [`results/w3_validation_2026-08-10.md`](results/w3_validation_2026-08-10.md) |
 
 ## What does not work yet
@@ -43,7 +46,8 @@ decoding on this setup. See below.
 | | Problem |
 |---|---|
 | Full Kimi-K3 on 50 cards | Does not fit. ~1601 GB against ~1160 GB usable. One MoE layer is 15.72 GB, so one layer per card → you would need ~93 cards. |
-| Speculative decoding | K3 ships **no MTP head**. The only alternative, DSpark, **refuses to run with pipeline parallelism**. We found the reason and a fix — see [`docs/DSPARK_PP_BLOCKER.md`](docs/DSPARK_PP_BLOCKER.md). |
+| CUDA graphs helping K3 | On GLM-4.5-Air graphs cut decode **3.41×** — on K3 they buy **~1%**, because PIECEWISE capture leaves attention outside the graph and 69 of K3's 93 layers are KDA linear attention. Forcing the KDA path into the graph is the biggest untried lever. |
+| Speculative decoding out of the box | Two upstream bugs block it: a config-time `SupportsPP` check on the draft ([#52069](https://github.com/vllm-project/vllm/issues/52069), our PR [#52117](https://github.com/vllm-project/vllm/pull/52117)) and silent output corruption without async scheduling ([#52071](https://github.com/vllm-project/vllm/issues/52071), fix branch shared). With those patched it works — see the table above. |
 | Quality after shrinking the model | **Never measured.** This is the question that decides whether any of this is worth doing. |
 
 ---
@@ -141,7 +145,15 @@ To add KV offload to disk:
 - **Do not build a slice from the upstream K3 config as-is.** It is multimodal
   now, so vLLM ≥0.27.0 tries to load a vision tower and gets OOM-killed.
   `tools/gen_slice_hf.py` writes a flat, text-only config instead.
-- **DSpark + pipeline parallelism raises `NotImplementedError`** by design.
+- **Never pass `--no-async-scheduling` with pipeline parallelism.** Only the
+  async scheduler arms the cadence that keeps a request's decodes `pp_size`
+  steps apart; without it speculative decoding silently corrupts output (token
+  id 0 embedded as the anchor), and even plain decode ran **1.94× slower** in
+  our measurements. ([vllm#52071](https://github.com/vllm-project/vllm/issues/52071))
+- **`--enforce-eager` is for debugging, not for serving.** We carried it from a
+  debugging session into a week of benchmarks; on GLM-4.5-Air it hid a 3.41×
+  difference. (On K3 graphs currently buy ~1% — see above — but measure, don't
+  inherit flags.)
 
 ---
 
@@ -163,9 +175,11 @@ take back), what every experiment actually measured, and what is still unknown.
 
 ## Honest limitations
 
-- Almost everything was measured on a **4-layer synthetic slice on 2 GPUs**, not
-  on the full 93-layer model. It proves the code paths work; it does not measure
-  real-world speed.
+- The most recent numbers come from a **real-weight 24-expert slice (141 GB,
+  all 93 layers) on 8×3090** — real architecture, real draft, real MXFP4. Its
+  *acceptance rate* still is not K3's (the draft was trained against the full
+  448-expert target), and its degenerate text makes it unusable for any test
+  that depends on exact token equality.
 - **No full-scale run has ever happened.** Multi-node behaviour, throughput with
   100 concurrent agents, and quality after pruning are all unknown.
 - The speedup numbers in the offload results (1.2–1.9×) are an artifact of the
@@ -175,7 +189,12 @@ take back), what every experiment actually measured, and what is still unknown.
 ## Upstream
 
 Bugs found here and reported to vLLM:
-[#51752](https://github.com/vllm-project/vllm/issues/51752) (ours),
+[#52069](https://github.com/vllm-project/vllm/issues/52069) + PR
+[#52117](https://github.com/vllm-project/vllm/pull/52117) (SupportsPP demanded
+of draft models under PP),
+[#52071](https://github.com/vllm-project/vllm/issues/52071) (spec + PP corrupts
+output without async scheduling; fix branch shared),
+[#51752](https://github.com/vllm-project/vllm/issues/51752),
 [#50947](https://github.com/vllm-project/vllm/issues/50947),
 [#50098](https://github.com/vllm-project/vllm/issues/50098).
 Details and current status in
