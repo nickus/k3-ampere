@@ -220,3 +220,44 @@ optimistic. It is still a transfer between architectures, and the honest way to
 close it is to run the K3 slice with graphs. That needs a box with ≥160 GB of
 disk; this one has 80 GB, which is my sizing error from when I thought the slice
 would not be needed.
+
+## Graphs and speculation together: they coexist, and on GLM speculation then hurts
+
+Same box, same model, `--speculative-config '{"method":"mtp",...}'` added:
+
+```
+                       eager        graphs      graphs vs eager
+no speculation      50.28 ms      14.74 ms          3.41x
+with speculation    47.90 ms      20.40 ms          2.35x
+```
+
+Two things worth separating:
+
+1. **Graph capture is not disabled by speculative decoding.** That was the risk
+   worth checking — a captured graph is a fixed shape and the verify step's shape
+   depends on how many drafts were accepted — and it did not materialise. Both
+   configurations served and completed 8/8 requests.
+2. **On GLM, once graphs are on, speculation costs 1.38×** (20.40 vs 14.74). That
+   is consistent with the acceptance of 1.00 measured earlier on this model: the
+   engine pays for a draft pass and banks nothing, and with graphs the baseline
+   got so much cheaper that the drafting overhead now dominates.
+
+Do not read that as a verdict on K3. There, DSpark accepts (1.577× measured on
+real weights), so the arithmetic is different — the draft has to be worth its
+overhead, and on GLM's MTP head it is not. What transfers is the mechanism:
+graphs work, speculation does not switch them off, and the two levers must be
+measured together rather than assumed additive.
+
+## Where the K3 rig number stands
+
+```
+                        per token     per agent
+eager , 50 stages        ~300 ms       3.3 tok/s     measured decomposition
+graphs, 50 stages        ~120 ms       8.3 tok/s     using GLM's 5.1x on model work
+graphs + spec decode      ~76 ms      13.0 tok/s     if K3 keeps its 1.577x
+```
+
+The last line is the one to distrust most: on GLM speculation stopped paying once
+graphs were on. K3's draft actually accepts, so it should still pay there — but
+that is exactly the pair of levers this campaign could not measure together on
+K3, because the slice needs ≥160 GB of disk and this box had 80.
