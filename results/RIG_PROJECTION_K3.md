@@ -116,3 +116,55 @@ the trade is linear in stage count.
 - Aggregate throughput: **weakest number here.** Pipeline filling was measured
   only to concurrency 4 on 8 stages, because the slice plus draft left under a
   gigabyte of KV. On the rig this is the first thing to measure properly.
+
+---
+
+## MEASURED 2026-08-13: eager vs CUDA graphs, and a correction
+
+The section above said the stage overhead is "kernel-launch and Python dispatch,
+which is exactly what CUDA graphs remove — cut it 3x and per-token drops to
+~200 ms with aggregate roughly doubling." That was an estimate. Here is the
+measurement, same 16-layer stand, same box, both orders:
+
+```
+              PP=2      PP=4      PP=8
+eager        19.12     32.41     38.74 ms
+graphs        2.48      7.46     13.65 ms
+
+least squares:
+  eager  : TPOT = 15.95 + 3.03 · pp
+  graphs : TPOT = -0.61 + 1.82 · pp
+```
+
+**Correction: the per-stage cost falls 1.67×, not 3×** — 3.03 → 1.82 ms. What
+does collapse almost entirely is the *fixed* term: 15.95 ms → ~0. On this stand
+that term is nearly all launch overhead, because its per-layer arithmetic is
+negligible by construction.
+
+On the stand alone, projecting the fit:
+
+```
+PP=30 : 107 ms eager  ->  54 ms graphs   1.98x
+PP=50 : 167 ms eager  ->  90 ms graphs   1.86x
+```
+
+### What this does and does not settle for the rig
+
+The rig's per-token budget is stage overhead **plus** ~148 ms of real K3 model
+work (the PP=8 measurement of 172.18 ms minus 8 × 3.03). The sweep above prices
+the first term and says nothing about the second, because the stand has almost no
+arithmetic in it. So:
+
+```
+eager , 50 stages : 148 + 167 = ~315 ms/token   ~3.2 tok/s
+graphs, 50 stages : 148 + 90  = ~238 ms/token   ~4.2 tok/s   (1.32x)
+```
+
+That 1.32× is a **lower bound**, and it assumes graphs do nothing for the 148 ms.
+The stand shows graphs erase essentially all launch overhead inside a stage, and
+93 layers of KDA + MLA + MoE launch a great many kernels, so the true figure is
+somewhere between 1.32× and roughly 2×. Pinning it down needs an eager-vs-graphs
+comparison on a real model, not a stand — which is the measurement running next.
+
+Not "roughly doubling", then. Between a third better and twice as fast, with the
+lower end already banked.

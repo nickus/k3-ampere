@@ -12,11 +12,17 @@
 set -u
 cd /workspace/k3
 PY=/venv/nm/bin/python
-OUT=/workspace/k3/hop_cost
+OUT=${OUT:-/workspace/k3/hop_cost}
 mkdir -p "$OUT"
 
 export VLLM_USE_V2_MODEL_RUNNER=1 VLLM_NO_USAGE_STATS=1 DO_NOT_TRACK=1
 export VLLM_USE_FLASHINFER_SAMPLER=0
+# EAGER=1 keeps --enforce-eager (how every measurement in this repo was taken,
+# inherited from the debugging harness); EAGER=0 lets vLLM capture CUDA graphs.
+# The whole point of the sweep is the difference between the two slopes: at ~50
+# stages the launch overhead is over half the per-token budget, and graphs are
+# what removes it.
+if [ "${EAGER:-1}" = 1 ]; then EAGER_ARG="--enforce-eager"; else EAGER_ARG=""; fi
 
 for pp in ${PPS:-1 2 4 8}; do
   port=$((19200 + pp))
@@ -27,7 +33,7 @@ for pp in ${PPS:-1 2 4 8}; do
     --model /workspace/k3/k3-slice-hf --served-model-name k3 --trust-remote-code \
     --load-format dummy --pipeline-parallel-size "$pp" --tensor-parallel-size 1 \
     --max-model-len 1024 --max-num-seqs 1 --no-enable-prefix-caching \
-    --gpu-memory-utilization 0.30 --enforce-eager --port "$port" \
+    --gpu-memory-utilization 0.30 ${EAGER_ARG} --port "$port" \
     > "$OUT/srv_pp${pp}.log" 2>&1 &
   for i in $(seq 1 60); do
     sleep 5
@@ -64,7 +70,7 @@ for _ in range(3):  # take the fastest pass; we want the floor, not the average
         best = tpot if best is None else min(best, tpot)
 print(f"PP={pp}: TPOT {best:.2f} ms" if best else f"PP={pp}: no data", flush=True)
 with open(f"{out}/hops.jsonl", "a") as f:
-    f.write(json.dumps({"pp": pp, "tpot_ms": best}) + "\n")
+    f.write(json.dumps({"pp": pp, "tpot_ms": best, "eager": __import__("os").environ.get("EAGER","1")}) + "\n")
 PY
 done
 pkill -9 -f "api_serve[r]" 2>/dev/null
