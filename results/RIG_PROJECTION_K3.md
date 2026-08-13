@@ -168,3 +168,55 @@ comparison on a real model, not a stand — which is the measurement running nex
 
 Not "roughly doubling", then. Between a third better and twice as fast, with the
 lower end already banked.
+
+## MEASURED on a real model: graphs are worth 3.41×, and my "lower bound" was wrong
+
+GLM-4.5-Air AWQ, PP=4, concurrency 1, 256-token generations, 2 repeats, nothing
+varied but `--enforce-eager`:
+
+```
+eager  : 50.27, 50.29 ms/token
+graphs : 14.72, 14.76 ms/token
+         3.41x, saving 35.5 ms per token
+```
+
+Decomposed with the per-stage slopes measured above:
+
+```
+eager  : 50.28 = model_work + 4 × 3.03  ->  model_work = 38.2 ms
+graphs : 14.74 = model_work + 4 × 1.82  ->  model_work =  7.5 ms
+                                            5.1x on the model work itself
+```
+
+**So the "1.32× lower bound" was built on a false assumption.** I assumed CUDA
+graphs do nothing for model work. On a real model at batch 1 they cut it 5.1×,
+because batch-1 decode is launch-bound, not arithmetic-bound: the GPU spends its
+time being told what to do, not doing it.
+
+### Rig projection, redone from measurements
+
+K3 at PP=8 eager measured 172.18 ms → model work = 172.18 − 8×3.03 = 148 ms.
+Applying the measured 5.1× to that term and the measured graph slope to the
+stages:
+
+```
+                        model work   +  stages        =  per token    per agent
+eager , 50 stages :        148       +  50 × 3.03     =  ~300 ms       3.3 tok/s
+graphs, 50 stages :         29       +  50 × 1.82     =  ~120 ms       8.3 tok/s
+                                                          2.5x
+with spec decode (1.577×) on top                      :   ~76 ms      13 tok/s
+```
+
+Aggregate ceiling rises with it: per-stage time falls to ~2.4 ms, so a filled
+pipeline tops out near 400 tok/s, and at the ~32% filling efficiency measured
+here that is ~130 tok/s across the swarm without speculation.
+
+### What is still assumed
+
+The 5.1× model-work reduction is measured on GLM-4.5-Air and applied to K3. Both
+are MoE, but K3 adds KDA linear attention, whose many small Triton kernels are if
+anything *more* launch-bound — so this is more likely conservative than
+optimistic. It is still a transfer between architectures, and the honest way to
+close it is to run the K3 slice with graphs. That needs a box with ≥160 GB of
+disk; this one has 80 GB, which is my sizing error from when I thought the slice
+would not be needed.
