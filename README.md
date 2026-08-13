@@ -111,6 +111,10 @@ VLLM_USE_V2_MODEL_RUNNER=1 vllm serve /workspace/k3/k3-slice-hf \
   --max-model-len 32768 --enforce-eager
 ```
 
+(`--enforce-eager` is fine *here* — this is a boot smoke test and skipping graph
+capture makes it faster. Drop it for anything you intend to time; see the traps
+section.)
+
 On sm_86 you should see `Using TRITON_MLA` and
 `Using FLASH_ATTN MLA prefill backend`, and no FlashKDA line. That is correct —
 those are the Ampere fallbacks.
@@ -168,8 +172,9 @@ take back), what every experiment actually measured, and what is still unknown.
 | [`JOURNAL.md`](JOURNAL.md) | The complete story. Read this first. |
 | `docs/` | Deep dives: the REAP route, the DSpark blocker, capacity math, the Ampere gap analysis |
 | `results/` | One file per experiment, with the raw numbers |
+| [`results/RIG_PROJECTION_K3.md`](results/RIG_PROJECTION_K3.md) | What these measurements add up to for a multi-card deployment: memory/KV arithmetic, per-agent decode, which levers worked (speculation: yes) and which did not (CUDA graphs on K3: ~1%) — with every retraction kept in place |
 | `fp8kv_k3_port/` | Our fp8 KV cache implementation, with tests |
-| `tools/` | Slice generator, patch scripts, checkpoint converter |
+| `tools/` | Slice generators (incl. `k3_expert_slice.py` — build a *runnable, real-weight* 24-expert K3 (~152 GB) from the 837 GB REAP checkpoint by HTTP range download), patch scripts, benchmark harnesses, checkpoint converter |
 
 ---
 
